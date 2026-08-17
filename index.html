@@ -236,9 +236,10 @@ async function loadRooms() {
 
   box.innerHTML = data.map(r => {
     const mem = (r.members ?? []).map(m => {
-      const cls = `mem ${m.gender === 'female' ? 'f' : 'm'}${m.left_reason ? ' out' : ''}`;
+      const cls = `mem ${m.gender === 'female' ? 'f' : 'm'}${m.left ? ' out' : ''}`;
       const mark = m.has_photo ? '' : ' ·사진없음';
-      return `<span class="${cls}">${escapeHtml(m.nickname)} ${escapeHtml(m.age_band ?? '')}${mark}</span>`;
+      const why = m.left_reason === 'expelled' ? ' (방출)' : m.left ? ' (나감)' : '';
+      return `<span class="${cls}">${escapeHtml(m.nickname)} ${escapeHtml(m.age_band ?? '')}${mark}${why}</span>`;
     }).join('');
 
     const mt = r.meeting;
