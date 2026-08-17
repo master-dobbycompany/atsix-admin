@@ -31,6 +31,18 @@ button:disabled { opacity:.5; }
 .ctx { max-height:260px; overflow-y:auto; font-size:13px; }
 .ctx p { padding:4px 0; border-bottom:1px solid #F3EEE8; }
 .hidden { display:none; }
+.tabs { display:flex; gap:6px; margin-bottom:12px; }
+.tabs button { flex:1; background:#fff; color:#8A8178; border:1px solid #E5DFD8; }
+.tabs button.on { background:#1F1B16; color:#fff; border-color:#1F1B16; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { border-bottom:1px solid #F3EEE8; padding:6px 4px; text-align:left; }
+th { color:#8A8178; font-weight:700; }
+td.num, th.num { text-align:right; }
+h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
+.mem { display:inline-block; background:#F3EEE8; border-radius:999px; padding:2px 8px;
+       margin:2px 3px 0 0; font-size:12px; }
+.mem.f { background:#FBE9E9; } .mem.m { background:#E8F0FB; }
+.mem.out { opacity:.45; text-decoration:line-through; }
 #toast { position:fixed; left:16px; right:16px; bottom:16px; background:#1F1B16; color:#fff;
          padding:14px; border-radius:12px; text-align:center; }
 </style>
@@ -65,7 +77,15 @@ button:disabled { opacity:.5; }
       </div>
     </div>
 
+    <div class="tabs">
+      <button id="tabReports" class="on">신고</button>
+      <button id="tabRooms">방</button>
+      <button id="tabStats">통계</button>
+    </div>
+
     <div id="reports"></div>
+    <div id="rooms" class="hidden"></div>
+    <div id="stats" class="hidden"></div>
   </div>
 </div>
 
@@ -206,17 +226,132 @@ function card(r) {
   return el;
 }
 
+// ---- 방: 어떤 사람들이 어떻게 모였고 미팅은 어땠나 ----
+async function loadRooms() {
+  const box = $('rooms');
+  box.innerHTML = '<div class="card muted">불러오는 중…</div>';
+  const { data, error } = await sb.rpc('admin_rooms', { p_limit: 20 });
+  if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
+  if (!data?.length) { box.innerHTML = '<div class="card">아직 방이 없어요.</div>'; return; }
+
+  box.innerHTML = data.map(r => {
+    const mem = (r.members ?? []).map(m => {
+      const cls = `mem ${m.gender === 'female' ? 'f' : 'm'}${m.left_reason ? ' out' : ''}`;
+      const mark = m.has_photo ? '' : ' ·사진없음';
+      return `<span class="${cls}">${escapeHtml(m.nickname)} ${escapeHtml(m.age_band ?? '')}${mark}</span>`;
+    }).join('');
+
+    const mt = r.meeting;
+    const meeting = !mt
+      ? '<p class="muted">미팅 아직 안 열림</p>'
+      : `<p>미팅 <b>${mt.status}</b>
+           ${mt.meets_at ? `· ${new Date(mt.meets_at).toLocaleString('ko-KR')}` : ''}
+           ${mt.settled ? `· 참석 <b>${mt.attendees}</b>명 · 1:1 <b>${mt.dm_threads}</b>쌍
+              ${mt.absence_notices ? `· 사전불참 ${mt.absence_notices}` : ''}`
+             : '<span class="muted"> (판정 전)</span>'}</p>`;
+
+    return `<div class="card">
+      <div class="row" style="justify-content:space-between">
+        <b>${escapeHtml(r.name)}</b>
+        <span class="muted">${new Date(r.started_at).toLocaleDateString('ko-KR')} 개설</span>
+      </div>
+      <p class="muted">${r.elapsed_days}일차 · 미션 ${r.completed_days}/${r.required_days} 완료
+         · 활성 ${r.active_members}명 · ${escapeHtml(r.status)}</p>
+      <div style="margin:6px 0">${mem}</div>
+      ${meeting}
+    </div>`;
+  }).join('');
+}
+
+// ---- 통계 ----
+async function loadStats() {
+  const box = $('stats');
+  box.innerHTML = '<div class="card muted">불러오는 중…</div>';
+  const { data: s, error } = await sb.rpc('admin_stats');
+  if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
+
+  const table = (rows, cols) => !rows?.length ? '<p class="muted">데이터 없음</p>' :
+    `<table><tr>${cols.map(c => `<th class="${c[2] ? 'num' : ''}">${c[1]}</th>`).join('')}</tr>` +
+    rows.map(r => `<tr>${cols.map(c =>
+      `<td class="${c[2] ? 'num' : ''}">${r[c[0]] ?? '-'}</td>`).join('')}</tr>`).join('') + '</table>';
+
+  const m = s.meetings ?? {}, a = s.activation ?? {}, p = s.photo ?? {};
+  box.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0">미팅 결과</h2>
+      <table>
+        <tr><td>미팅 열림</td><td class="num"><b>${m.total ?? 0}</b></td></tr>
+        <tr><td>시간 확정</td><td class="num"><b>${m.confirmed ?? 0}</b></td></tr>
+        <tr><td>판정 완료</td><td class="num"><b>${m.settled ?? 0}</b></td></tr>
+        <tr><td>평균 참석 인원</td><td class="num"><b>${m.avg_attendees ?? '-'}</b></td></tr>
+        <tr><td>열린 1:1</td><td class="num"><b>${m.total_dm_threads ?? 0}</b>쌍</td></tr>
+        <tr><td>사전 불참 통지</td><td class="num">${m.absence_notices ?? 0}</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">북극성 · 주차별 완주율</h2>
+      <p class="muted">개설 후 완주할 시간이 부족한 방은 분모에서 뺀다.</p>
+      ${table(s.cohorts, [['cohort_week', '주차'], ['rooms_opened', '개설', 1],
+        ['rooms_mature', '판정가능', 1], ['rooms_completed', '완주', 1], ['completion_rate_pct', '완주율%', 1]])}
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">첫날 활성화</h2>
+      <p class="muted">방 개설 알림이 먹히는가. 열지도 않았다 vs 열었는데 말 안 했다.</p>
+      <table>
+        <tr><td>첫날 발언율</td><td class="num"><b>${a.avg_first_day_speak_pct ?? '-'}%</b></td></tr>
+        <tr><td>앱 열어본 비율</td><td class="num">${a.avg_opened_pct ?? '-'}%</td></tr>
+        <tr><td>사진 등록률(3일차+)</td><td class="num">${p.avg_rate_pct ?? '-'}%</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">일차별 완료율 · 어디서 죽는가</h2>
+      ${table(s.day_completion, [['day_no', '일차'], ['rooms_reached', '도달', 1],
+        ['rooms_completed', '완료', 1], ['completion_rate_pct', '완료율%', 1]])}
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">대기열 (성비가 먼저 무너진다)</h2>
+      ${table(s.queue, [['region', '지역'], ['age_band', '나이대'], ['interest', '관심사'],
+        ['female_waiting', '여', 1], ['male_waiting', '남', 1], ['oldest_wait_hours', '최장대기h', 1]])}
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">이탈</h2>
+      ${table(s.exits, [['cohort_week', '주차'], ['memberships', '참여', 1],
+        ['still_active', '유지', 1], ['left_voluntarily', '나감', 1], ['expelled', '방출', 1]])}
+    </div>`;
+}
+
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+// 탭. 들어갈 때만 불러온다 — 신고 처리하러 열었는데 통계 쿼리까지 도는 건 낭비다.
+const TABS = { reports: loadReports, rooms: loadRooms, stats: loadStats };
+let tab = 'reports';
+
+async function showTab(name) {
+  tab = name;
+  for (const key of Object.keys(TABS)) {
+    $(key).classList.toggle('hidden', key !== name);
+    $('tab' + key[0].toUpperCase() + key.slice(1)).classList.toggle('on', key === name);
+  }
+  await TABS[name]();
+}
+$('tabReports').onclick = () => showTab('reports');
+$('tabRooms').onclick = () => showTab('rooms');
+$('tabStats').onclick = () => showTab('stats');
 
 $('loginBtn').onclick = login;
 $('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
 $('refresh').onclick = async () => {
   const { data } = await sb.rpc('admin_dashboard');
   if (data) render(data);
-  await loadReports();
+  await TABS[tab]();   // 보고 있는 탭만 다시 부른다
 };
 $('logout').onclick = async () => { await sb.auth.signOut(); location.reload(); };
 
