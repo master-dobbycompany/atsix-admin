@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>여섯시 운영 콘솔</title>
+<style>
+/* 폰에서 한 손으로 쓰는 것이 목적이다. 밤에 신고가 오면 PC 앞에 없다. */
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+body { font-family:"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+       background:#FAF8F5; color:#1F1B16; line-height:1.6; font-size:16px; padding-bottom:40px; }
+.wrap { max-width:720px; margin:0 auto; padding:16px; }
+h1 { font-size:20px; font-weight:800; margin-bottom:12px; }
+.card { background:#fff; border:1px solid #E5DFD8; border-radius:16px; padding:16px; margin-bottom:12px; }
+.row { display:flex; gap:8px; flex-wrap:wrap; }
+input, button, select, textarea { font:inherit; }
+input, textarea { width:100%; padding:12px; border:1px solid #E5DFD8; border-radius:12px; background:#fff; }
+textarea { min-height:70px; resize:vertical; }
+button { padding:12px 14px; border:0; border-radius:12px; background:#F2543D; color:#fff; font-weight:700; cursor:pointer; }
+button.ghost { background:#fff; color:#1F1B16; border:1px solid #E5DFD8; }
+button.warn { background:#C0392B; }
+button:disabled { opacity:.5; }
+.muted { color:#8A8178; font-size:13px; }
+.pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700;
+        background:#F3EEE8; color:#8A8178; }
+.pill.hot { background:#FBE9E9; color:#C0392B; }
+.stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; text-align:center; }
+.stats div b { display:block; font-size:22px; }
+.msg { background:#F3EEE8; border-radius:10px; padding:10px; margin:8px 0; font-size:14px; white-space:pre-wrap; }
+.ctx { max-height:260px; overflow-y:auto; font-size:13px; }
+.ctx p { padding:4px 0; border-bottom:1px solid #F3EEE8; }
+.hidden { display:none; }
+#toast { position:fixed; left:16px; right:16px; bottom:16px; background:#1F1B16; color:#fff;
+         padding:14px; border-radius:12px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>여섯시 운영 콘솔</h1>
+
+  <!-- 로그인 -->
+  <div id="login" class="card">
+    <p class="muted" style="margin-bottom:10px">관리자 계정으로 로그인하세요.</p>
+    <input id="email" type="email" placeholder="이메일" autocomplete="username">
+    <div style="height:8px"></div>
+    <input id="password" type="password" placeholder="비밀번호" autocomplete="current-password">
+    <div style="height:10px"></div>
+    <button id="loginBtn" style="width:100%">로그인</button>
+    <p id="loginErr" class="muted" style="color:#C0392B; margin-top:8px"></p>
+  </div>
+
+  <!-- 대시보드 -->
+  <div id="app" class="hidden">
+    <div class="card">
+      <div class="stats">
+        <div><b id="sReports">-</b><span class="muted">미처리 신고</span></div>
+        <div><b id="sQueue">-</b><span class="muted">대기 (여/남)</span></div>
+        <div><b id="sRooms">-</b><span class="muted">활성 방</span></div>
+      </div>
+      <div style="height:10px"></div>
+      <div class="row">
+        <button class="ghost" id="refresh" style="flex:1">새로고침</button>
+        <button class="ghost" id="logout">로그아웃</button>
+      </div>
+    </div>
+
+    <div id="reports"></div>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+// anon 키는 공개용이다. 실제 권한은 서버의 is_admin() 검사와 RLS 가 결정한다.
+const sb = createClient(
+  'https://snszyugzoxektvcyydya.supabase.co',
+  'sb_publishable_3a09zQjtuhXN8CV0g7NnaQ_kGTtqlNC'
+);
+
+const $ = (id) => document.getElementById(id);
+const REASONS = {
+  sexual: '성적인 메시지', harassment: '욕설·비하·괴롭힘',
+  impersonation: '사칭·프로필 거짓', spam: '광고·외부 유도',
+  noshow_fraud: '미팅 관련 문제 행동', other: '기타',
+};
+const ACTIONS = [
+  ['reviewed_no_action', '문제 없음', 'ghost'],
+  ['warned', '경고', ''],
+  ['removed_from_room', '방에서 제외', ''],
+  ['suspended', '이용 정지', 'warn'],
+];
+
+function toast(text) {
+  const t = $('toast');
+  t.textContent = text;
+  t.classList.remove('hidden');
+  setTimeout(() => t.classList.add('hidden'), 2800);
+}
+
+async function login() {
+  $('loginErr').textContent = '';
+  $('loginBtn').disabled = true;
+  const { error } = await sb.auth.signInWithPassword({
+    email: $('email').value.trim(), password: $('password').value,
+  });
+  $('loginBtn').disabled = false;
+  if (error) { $('loginErr').textContent = '로그인 실패: ' + error.message; return; }
+  await start();
+}
+
+async function start() {
+  // 관리자가 아니면 서버가 예외를 던진다 — 화면을 열어두지 않는다.
+  const { data, error } = await sb.rpc('admin_dashboard');
+  if (error) {
+    $('loginErr').textContent = '관리자 권한이 없는 계정이에요.';
+    await sb.auth.signOut();
+    return;
+  }
+  $('login').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  render(data);
+  await loadReports();
+}
+
+function render(d) {
+  $('sReports').textContent = d.open_reports ?? 0;
+  $('sQueue').textContent = `${d.queue_female ?? 0}/${d.queue_male ?? 0}`;
+  $('sRooms').textContent = d.active_rooms ?? 0;
+}
+
+async function loadReports() {
+  const box = $('reports');
+  box.innerHTML = '<div class="card muted">불러오는 중…</div>';
+  const { data, error } = await sb.rpc('admin_open_reports');
+  if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
+  if (!data.length) {
+    box.innerHTML = '<div class="card">미처리 신고가 없어요. 👍</div>';
+    return;
+  }
+  box.innerHTML = '';
+  for (const r of data) box.appendChild(card(r));
+}
+
+function card(r) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const hot = r.hours_open >= 24;
+  el.innerHTML = `
+    <div class="row" style="justify-content:space-between; align-items:center">
+      <span class="pill ${hot ? 'hot' : ''}">${r.hours_open}시간 경과</span>
+      <span class="muted">${new Date(r.created_at).toLocaleString('ko-KR')}</span>
+    </div>
+    <p style="margin-top:8px"><b>${r.reported ?? '(탈퇴)'}</b> 님을
+       <b>${REASONS[r.reason_code] ?? r.reason_code}</b> 로 신고
+       <span class="muted">(신고자 ${r.reporter ?? '(탈퇴)'})</span></p>
+    ${r.message_body ? `<div class="msg">${escapeHtml(r.message_body)}</div>` : ''}
+    ${r.reason ? `<p class="muted">사유 상세: ${escapeHtml(r.reason)}</p>` : ''}
+    <div class="row" style="margin-top:8px">
+      <button class="ghost ctxBtn" style="flex:1">대화 보기</button>
+      <button class="ghost histBtn" style="flex:1">이 사람 이력</button>
+    </div>
+    <div class="ctx hidden"></div>
+    <div style="height:10px"></div>
+    <textarea placeholder="판단 근거 (분쟁 시 이게 핵심이에요)"></textarea>
+    <div style="height:8px"></div>
+    <div class="row">
+      ${ACTIONS.map(([a, label, cls]) =>
+        `<button class="${cls} act" data-a="${a}" style="flex:1 1 46%">${label}</button>`).join('')}
+    </div>`;
+
+  const ctx = el.querySelector('.ctx');
+  el.querySelector('.ctxBtn').onclick = async () => {
+    if (!r.room_id) return toast('방 정보가 없는 신고예요');
+    ctx.classList.toggle('hidden');
+    if (ctx.dataset.loaded) return;
+    const { data } = await sb.rpc('admin_room_context', { p_room: r.room_id, p_limit: 40 });
+    ctx.innerHTML = (data ?? []).reverse()
+      .map(m => `<p><b>${escapeHtml(m.nickname)}</b> ${escapeHtml(m.body)}</p>`).join('');
+    ctx.dataset.loaded = '1';
+  };
+  el.querySelector('.histBtn').onclick = async () => {
+    const { data } = await sb.rpc('admin_user_history', { p_user: r.reported_id });
+    toast(!data?.length ? '이전 신고 없음'
+      : `이전 신고 ${data.length}건 · 최근: ${REASONS[data[0].reason_code] ?? ''} (${data[0].action ?? '미처리'})`);
+  };
+
+  el.querySelectorAll('.act').forEach(btn => {
+    btn.onclick = async () => {
+      const note = el.querySelector('textarea').value.trim();
+      if (!note) return toast('판단 근거를 적어주세요');
+      if (!confirm(`"${btn.textContent}" 처리할까요?`)) return;
+      el.querySelectorAll('button').forEach(b => b.disabled = true);
+      const { data, error } = await sb.rpc('admin_act', {
+        p_report: r.id, p_action: btn.dataset.a, p_note: note, p_block_days: 30,
+      });
+      if (error) { toast('실패: ' + error.message); el.querySelectorAll('button').forEach(b => b.disabled = false); return; }
+      toast(data ?? '처리 완료');
+      el.remove();
+      const { data: d } = await sb.rpc('admin_dashboard');
+      if (d) render(d);
+    };
+  });
+  return el;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+$('loginBtn').onclick = login;
+$('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+$('refresh').onclick = async () => {
+  const { data } = await sb.rpc('admin_dashboard');
+  if (data) render(data);
+  await loadReports();
+};
+$('logout').onclick = async () => { await sb.auth.signOut(); location.reload(); };
+
+// 이미 로그인돼 있으면 바로 콘솔로
+const { data: { session } } = await sb.auth.getSession();
+if (session) await start();
+</script>
+</body>
+</html>
