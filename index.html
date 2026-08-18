@@ -236,9 +236,13 @@ async function loadRooms() {
 
   box.innerHTML = data.map(r => {
     const mem = (r.members ?? []).map(m => {
-      const cls = `mem ${m.gender === 'female' ? 'f' : 'm'}${m.left ? ' out' : ''}`;
+      // 완주는 이탈이 아니다. 방이 끝나서 나간 것이라 취소선을 긋지 않는다.
+      const gone = m.left && m.left_reason !== 'completed';
+      const cls = `mem ${m.gender === 'female' ? 'f' : 'm'}${gone ? ' out' : ''}`;
       const mark = m.has_photo ? '' : ' ·사진없음';
-      const why = m.left_reason === 'expelled' ? ' (방출)' : m.left ? ' (나감)' : '';
+      const why = m.left_reason === 'expelled' ? ' (방출)'
+                : m.left_reason === 'completed' ? ' (완주)'
+                : m.left ? ' (나감)' : '';
       return `<span class="${cls}">${escapeHtml(m.nickname)} ${escapeHtml(m.age_band ?? '')}${mark}${why}</span>`;
     }).join('');
 
