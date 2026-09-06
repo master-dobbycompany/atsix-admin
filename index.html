@@ -81,11 +81,13 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
       <button id="tabReports" class="on">신고</button>
       <button id="tabRooms">방</button>
       <button id="tabStats">통계</button>
+      <button id="tabRegions">지역</button>
     </div>
 
     <div id="reports"></div>
     <div id="rooms" class="hidden"></div>
     <div id="stats" class="hidden"></div>
+    <div id="regions" class="hidden"></div>
   </div>
 </div>
 
@@ -268,6 +270,38 @@ async function loadRooms() {
   }).join('');
 }
 
+// ---- 지역: 어디에 수요가 쌓였나 = 다음에 열 곳 ----
+async function loadRegions() {
+  const box = $('regions');
+  box.innerHTML = '<div class="card muted">불러오는 중…</div>';
+  const { data, error } = await sb.rpc('admin_region_demand');
+  if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
+
+  const rows = (data ?? []).map(r => `<tr>
+      <td>${escapeHtml(r.region)}</td>
+      <td>${r.active ? '<b>열림</b>' : '<span class="muted">준비 중</span>'}</td>
+      <td class="num"><b>${r.waiting}</b></td>
+      <td class="num">${r.female}</td>
+      <td class="num">${r.male}</td>
+    </tr>`).join('');
+
+  box.innerHTML = `<div class="card">
+    <h2 style="margin-top:0">지역별 대기 인원</h2>
+    <p class="muted">3:3 이 모여야 방이 열린다 — <b>여3 / 남3 이 최소선</b>이고,
+       한쪽만 쌓이면 열어도 방이 안 열린다. 여는 순서는 이 표의 성비로 정한다.</p>
+    <table>
+      <tr><th>지역</th><th>상태</th><th class="num">대기</th>
+          <th class="num">여</th><th class="num">남</th></tr>
+      ${rows || '<tr><td colspan="5" class="muted">아직 없어요</td></tr>'}
+    </table>
+    <p class="muted" style="margin-top:10px">
+      여는 방법(대시보드 SQL Editor):<br>
+      <code>select set_region_active('강남·서초', true);</code><br>
+      켜는 순간 그 지역 대기자가 다음 매칭 배치에 들어갑니다.
+    </p>
+  </div>`;
+}
+
 // ---- 통계 ----
 async function loadStats() {
   const box = $('stats');
@@ -336,7 +370,7 @@ function escapeHtml(s) {
 }
 
 // 탭. 들어갈 때만 불러온다 — 신고 처리하러 열었는데 통계 쿼리까지 도는 건 낭비다.
-const TABS = { reports: loadReports, rooms: loadRooms, stats: loadStats };
+const TABS = { reports: loadReports, rooms: loadRooms, stats: loadStats, regions: loadRegions };
 let tab = 'reports';
 
 async function showTab(name) {
@@ -350,6 +384,7 @@ async function showTab(name) {
 $('tabReports').onclick = () => showTab('reports');
 $('tabRooms').onclick = () => showTab('rooms');
 $('tabStats').onclick = () => showTab('stats');
+$('tabRegions').onclick = () => showTab('regions');
 
 $('loginBtn').onclick = login;
 $('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
