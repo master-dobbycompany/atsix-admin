@@ -122,23 +122,45 @@ function toast(text) {
   setTimeout(() => t.classList.add('hidden'), 2800);
 }
 
+// 로그인 실패는 한 문구로만 말한다. 비밀번호가 틀렸을 때와 맞았지만 관리자가
+// 아닐 때를 가르면, 이 화면이 비밀번호 확인기가 된다.
+const LOGIN_FAIL = '이메일 또는 비밀번호가 맞지 않아요';
+
+function isNetworkError(e) {
+  const m = String(e?.message ?? e ?? '').toLowerCase();
+  return m.includes('fetch') || m.includes('network') || m.includes('failed to fetch');
+}
+
 async function login() {
   $('loginErr').textContent = '';
   $('loginBtn').disabled = true;
-  const { error } = await sb.auth.signInWithPassword({
-    email: $('email').value.trim(), password: $('password').value,
-  });
-  $('loginBtn').disabled = false;
-  if (error) { $('loginErr').textContent = '로그인 실패: ' + error.message; return; }
-  await start();
+  try {
+    const { error } = await sb.auth.signInWithPassword({
+      email: $('email').value.trim(), password: $('password').value,
+    });
+    if (error) {
+      $('loginErr').textContent = isNetworkError(error)
+        ? '인터넷 연결을 확인하고 다시 시도해주세요'
+        : LOGIN_FAIL;
+      return;
+    }
+    await start({ fromLogin: true });
+  } finally {
+    $('loginBtn').disabled = false;
+  }
 }
 
-async function start() {
+async function start({ fromLogin = false } = {}) {
   // 관리자가 아니면 서버가 예외를 던진다 — 화면을 열어두지 않는다.
+  // 실패 사유는 로그인 실패와 같게 둔다. 관리자 아님을 알리면 비밀번호가 맞았다는 뜻이다.
   const { data, error } = await sb.rpc('admin_dashboard');
   if (error) {
-    $('loginErr').textContent = '관리자 권한이 없는 계정이에요.';
     await sb.auth.signOut();
+    if (fromLogin) {
+      $('loginErr').textContent = isNetworkError(error)
+        ? '인터넷 연결을 확인하고 다시 시도해주세요'
+        : LOGIN_FAIL;
+    }
     return;
   }
   $('login').classList.add('hidden');
