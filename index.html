@@ -394,10 +394,9 @@ async function loadStats() {
     </div>`;
 }
 
-function renderContext(ctx, rows, r) {
+function renderContext(ctx, roomRows, r) {
   const reported = r.reported ?? '';
   const focusBody = r.message_body ?? '';
-  const chronological = [...rows].reverse();
   ctx.innerHTML = `
     <input class="ctxFind" type="search" placeholder="대화에서 찾기" autocomplete="off">
     <div class="row" style="margin:8px 0">
@@ -408,13 +407,13 @@ function renderContext(ctx, rows, r) {
   const find = ctx.querySelector('.ctxFind');
   const onlyBtn = ctx.querySelector('.ctxOnly');
   let onlyThem = false;
+  let userRows = null;
 
-  function paint() {
+  function draw(rows) {
     const q = find.value.trim().toLowerCase();
-    const html = chronological.map((m) => {
+    const html = [...rows].reverse().map((m) => {
       const nick = m.nickname ?? '';
       const body = m.body ?? '';
-      if (onlyThem && nick !== reported) return '';
       if (q && !`${nick} ${body}`.toLowerCase().includes(q)) return '';
       const hit = focusBody && body === focusBody;
       const from = nick === reported;
@@ -425,11 +424,42 @@ function renderContext(ctx, rows, r) {
     jump?.scrollIntoView({ block: 'center' });
   }
 
-  find.oninput = paint;
-  onlyBtn.onclick = () => {
+  async function paint() {
+    if (!onlyThem) {
+      draw(roomRows);
+      return;
+    }
+    if (!r.reported_id) {
+      toast('탈퇴한 계정이라 말을 모아 볼 수 없어요');
+      onlyThem = false;
+      onlyBtn.textContent = '이 사람이 한 말만';
+      draw(roomRows);
+      return;
+    }
+    if (!userRows) {
+      onlyBtn.disabled = true;
+      const { data, error } = await sb.rpc('admin_room_context', {
+        p_room: r.room_id, p_limit: 500, p_user: r.reported_id,
+      });
+      onlyBtn.disabled = false;
+      if (error) {
+        toast('대화를 더 불러오지 못했어요');
+        onlyThem = false;
+        onlyBtn.textContent = '이 사람이 한 말만';
+        draw(roomRows);
+        return;
+      }
+      userRows = data ?? [];
+    }
+    draw(userRows);
+  }
+
+  find.oninput = () => { paint(); };
+  onlyBtn.onclick = async () => {
     onlyThem = !onlyThem;
+    onlyBtn.textContent = onlyThem ? '불러오는 중...' : '이 사람이 한 말만';
+    await paint();
     onlyBtn.textContent = onlyThem ? '전체 대화 보기' : '이 사람이 한 말만';
-    paint();
   };
   paint();
 }
