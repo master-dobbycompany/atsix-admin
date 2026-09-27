@@ -28,8 +28,12 @@ button:disabled { opacity:.5; }
 .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; text-align:center; }
 .stats div b { display:block; font-size:22px; }
 .msg { background:#F3EEE8; border-radius:10px; padding:10px; margin:8px 0; font-size:14px; white-space:pre-wrap; }
-.ctx { max-height:260px; overflow-y:auto; font-size:13px; }
-.ctx p { padding:4px 0; border-bottom:1px solid #F3EEE8; }
+.ctx { font-size:13px; margin-top:10px; }
+.ctxList { max-height:320px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+.ctxList p { padding:8px 0; border-bottom:1px solid #F3EEE8; word-break:break-word; }
+.ctxList p b { display:block; font-size:12px; color:#8A8178; margin-bottom:2px; }
+.ctxList p.fromTarget b { color:#C0392B; }
+.ctxList p.hit { background:#FBE9E9; margin:0 -8px; padding:8px; border-radius:8px; }
 .hidden { display:none; }
 .tabs { display:flex; gap:6px; margin-bottom:12px; }
 .tabs button { flex:1; background:#fff; color:#8A8178; border:1px solid #E5DFD8; }
@@ -103,10 +107,15 @@ const sb = createClient(
 );
 
 const $ = (id) => document.getElementById(id);
+// 앱 AppState.reportReasons · 서버 reports_self · 커뮤니티 가이드와 같아야 한다.
 const REASONS = {
-  sexual: '성적인 메시지', harassment: '욕설·비하·괴롭힘',
-  impersonation: '사칭·프로필 거짓', spam: '광고·외부 유도',
-  noshow_fraud: '미팅 관련 문제 행동', other: '기타',
+  sexual: '성적인 메시지',
+  minor_safety: '미성년자·아동 안전',
+  harassment: '욕설·비하·괴롭힘',
+  impersonation: '사칭·프로필 거짓 기재',
+  spam: '광고·홍보·외부 유도',
+  noshow_fraud: '미팅 관련 문제 행동',
+  other: '기타',
 };
 const ACTIONS = [
   ['reviewed_no_action', '문제 없음', 'ghost'],
@@ -197,9 +206,9 @@ function card(r) {
       <span class="pill ${hot ? 'hot' : ''}">${r.hours_open}시간 경과</span>
       <span class="muted">${new Date(r.created_at).toLocaleString('ko-KR')}</span>
     </div>
-    <p style="margin-top:8px"><b>${r.reported ?? '(탈퇴)'}</b> 님을
-       <b>${REASONS[r.reason_code] ?? r.reason_code}</b> 로 신고
-       <span class="muted">(신고자 ${r.reporter ?? '(탈퇴)'})</span></p>
+    <p style="margin-top:8px"><b>${escapeHtml(r.reported ?? '(탈퇴)')}</b> 님을
+       <b>${escapeHtml(REASONS[r.reason_code] ?? r.reason_code)}</b> 로 신고
+       <span class="muted">(신고자 ${escapeHtml(r.reporter ?? '(탈퇴)')})</span></p>
     ${r.message_body ? `<div class="msg">${escapeHtml(r.message_body)}</div>` : ''}
     ${r.reason ? `<p class="muted">사유 상세: ${escapeHtml(r.reason)}</p>` : ''}
     <div class="row" style="margin-top:8px">
@@ -220,9 +229,8 @@ function card(r) {
     if (!r.room_id) return toast('방 정보가 없는 신고예요');
     ctx.classList.toggle('hidden');
     if (ctx.dataset.loaded) return;
-    const { data } = await sb.rpc('admin_room_context', { p_room: r.room_id, p_limit: 40 });
-    ctx.innerHTML = (data ?? []).reverse()
-      .map(m => `<p><b>${escapeHtml(m.nickname)}</b> ${escapeHtml(m.body)}</p>`).join('');
+    const { data } = await sb.rpc('admin_room_context', { p_room: r.room_id, p_limit: 200 });
+    renderContext(ctx, data ?? [], r);
     ctx.dataset.loaded = '1';
   };
   el.querySelector('.histBtn').onclick = async () => {
@@ -384,6 +392,46 @@ async function loadStats() {
       ${table(s.exits, [['cohort_week', '주차'], ['memberships', '참여', 1],
         ['still_active', '유지', 1], ['left_voluntarily', '나감', 1], ['expelled', '방출', 1]])}
     </div>`;
+}
+
+function renderContext(ctx, rows, r) {
+  const reported = r.reported ?? '';
+  const focusBody = r.message_body ?? '';
+  const chronological = [...rows].reverse();
+  ctx.innerHTML = `
+    <input class="ctxFind" type="search" placeholder="대화에서 찾기" autocomplete="off">
+    <div class="row" style="margin:8px 0">
+      <button type="button" class="ghost ctxOnly" style="flex:1">이 사람이 한 말만</button>
+    </div>
+    <div class="ctxList"></div>`;
+  const list = ctx.querySelector('.ctxList');
+  const find = ctx.querySelector('.ctxFind');
+  const onlyBtn = ctx.querySelector('.ctxOnly');
+  let onlyThem = false;
+
+  function paint() {
+    const q = find.value.trim().toLowerCase();
+    const html = chronological.map((m) => {
+      const nick = m.nickname ?? '';
+      const body = m.body ?? '';
+      if (onlyThem && nick !== reported) return '';
+      if (q && !`${nick} ${body}`.toLowerCase().includes(q)) return '';
+      const hit = focusBody && body === focusBody;
+      const from = nick === reported;
+      return `<p class="${hit ? 'hit' : ''} ${from ? 'fromTarget' : ''}"><b>${escapeHtml(nick)}</b>${escapeHtml(body)}</p>`;
+    }).join('');
+    list.innerHTML = html || '<p class="muted">해당하는 말이 없어요</p>';
+    const jump = list.querySelector('.hit') || list.querySelector('.fromTarget');
+    jump?.scrollIntoView({ block: 'center' });
+  }
+
+  find.oninput = paint;
+  onlyBtn.onclick = () => {
+    onlyThem = !onlyThem;
+    onlyBtn.textContent = onlyThem ? '전체 대화 보기' : '이 사람이 한 말만';
+    paint();
+  };
+  paint();
 }
 
 function escapeHtml(s) {
