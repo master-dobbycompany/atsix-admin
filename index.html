@@ -689,8 +689,10 @@ async function loadStats() {
       <h2 style="margin-top:0">일차별 완료율 · 어디서 죽는가</h2>
       <p class="muted">막대가 꺾이는 일차가 손볼 곳이다(%).</p>
       <div class="viz" id="vizDays">${columnChart(dayRows, { unit: '%', fixedMax: 100 })}</div>
+      <details style="margin-top:6px;font-size:13px"><summary class="muted" style="cursor:pointer">표로 보기</summary>
       ${table(s.day_completion, [['day_no', '일차'], ['rooms_reached', '도달', 1],
         ['rooms_completed', '완료', 1], ['completion_rate_pct', '완료율%', 1]])}
+      </details>
     </div>
 
     <div class="card">
