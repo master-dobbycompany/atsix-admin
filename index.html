@@ -618,6 +618,10 @@ async function loadStats() {
   const [{ data: w }, { data: hist }, { data: signups }] = await Promise.all([
     sb.rpc('admin_wait_stats'), sb.rpc('admin_wait_histogram'), sb.rpc('admin_signup_trend', { p_days: 30 }),
   ]);
+  const { data: outcomes } = await sb.rpc('admin_room_outcomes', { p_days: 90 });
+  const outTotal = (outcomes ?? []).reduce((n, o) => n + o.rooms, 0);
+  const outRows = (outcomes ?? []).map(o => ({ label: o.outcome, value: o.rooms,
+    pct: outTotal ? Math.round(1000 * o.rooms / outTotal) / 10 : 0 }));
   const histRows = (hist ?? []).map(h => ({ label: h.label, value: h.count }));
   const signRows = (signups ?? []).map(d => ({ label: String(d.day).slice(5, 10).replace('-', '/'), a: d.female, b: d.male, day: String(d.day).slice(0, 10) }));
   const cohortRows = [...(s.cohorts ?? [])].reverse().map(c => ({
@@ -668,6 +672,16 @@ async function loadStats() {
     </div>
 
     <div class="card">
+      <h2 style="margin-top:0">방이 어떻게 끝났나 (최근 90일)</h2>
+      <p class="muted">방 ${outTotal}개. 완주 = 판정까지 감 · 미팅 무산 = 올 사람이 1명 이하였고 다시 모이지 못함 ·
+         해산 = 한 명만 남음. 무산·해산이 늘면 [방] 탭에서 어디서 끊겼는지 본다. 테스트 지역 제외.</p>
+      <div class="viz" id="vizOutcome">
+        ${columnChart(outRows, { unit: '개' })}
+        ${tableView(outRows, [['label', '결과'], ['value', '방', 1], ['pct', '%', 1]])}
+      </div>
+    </div>
+
+    <div class="card">
       <h2 style="margin-top:0">북극성 · 주차별 완주율</h2>
       <p class="muted">개설 후 완주할 시간이 부족한 방은 분모에서 뺀다. 막대 = 주차별 완주율(%).</p>
       <div class="viz" id="vizCohort">${columnChart(cohortRows, { unit: '%', fixedMax: 100 })}</div>
@@ -708,6 +722,7 @@ async function loadStats() {
     </div>`;
   wireColumn($('vizWait'), histRows, r => `${r.label}<br><b>${r.value}명</b>`);
   wireLine($('vizSignup'), signRows, r => `${r.day}<br>여 <b>${r.a}</b> · 남 <b>${r.b}</b>`);
+  wireColumn($('vizOutcome'), outRows, r => `${r.label}<br><b>${r.value}개</b> (${r.pct}%)`);
   wireColumn($('vizCohort'), cohortRows, r => `${r.raw.cohort_week} 주<br>완주 <b>${r.value}%</b> (${r.raw.rooms_completed}/${r.raw.rooms_mature})`);
   wireColumn($('vizDays'), dayRows, r => `${r.label}차<br>완료 <b>${r.value}%</b> (${r.raw.rooms_completed}/${r.raw.rooms_reached})`);
 }
