@@ -519,8 +519,10 @@ function tableView(rows, cols) {
 }
 
 // 세로 막대. rows: [{label, value, tip}] · unit: 축·툴팁 단위 · fixedMax: 퍼센트면 100
-function columnChart(rows, { unit = '', fixedMax = null, labelEvery = 1 } = {}) {
+function columnChart(rows, { unit = '', fixedMax = null, labelEvery = null } = {}) {
   if (!rows?.length) return '<p class="muted">데이터 없음</p>';
+  // 막대가 많으면 x 라벨을 건너뛴다(겹치면 아무것도 못 읽는다). 값은 툴팁·표에 다 있다.
+  labelEvery = labelEvery ?? Math.ceil(rows.length / 12);
   const W = 600, H = 190, L = 34, R = 6, T = 14, B = 26;
   const max = fixedMax ?? niceMax(Math.max(...rows.map(r => r.value ?? 0)));
   const band = (W - L - R) / rows.length, bw = Math.min(24, band * 0.6);
