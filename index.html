@@ -308,27 +308,39 @@ async function loadRegions() {
   const { data, error } = await sb.rpc('admin_region_demand');
   if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
 
-  const rows = (data ?? []).map(r => `<tr>
+  const need = (data ?? [])[0]?.open_min_per_gender ?? 30;
+  const rows = (data ?? []).map(r => {
+    // 자동으로 열리는 조건: 여·남 각 need 명 이상 + 장소 카페 2 · 식당 2 (auto_open_regions, 10분마다)
+    const why = r.active ? ''
+      : (r.female < need || r.male < need) ? `여 ${Math.max(0, need - r.female)} · 남 ${Math.max(0, need - r.male)} 더`
+      : !r.places_ready ? '<b>장소 부족</b>(카페 2 · 식당 2)'
+      : '다음 배치에 열림';
+    return `<tr>
       <td>${escapeHtml(r.region)}</td>
       <td>${r.active ? '<b>열림</b>' : '<span class="muted">준비 중</span>'}</td>
       <td class="num"><b>${r.waiting}</b></td>
       <td class="num">${r.female}</td>
       <td class="num">${r.male}</td>
-    </tr>`).join('');
+      <td>${r.places_ready ? '2·2 ✓' : '<span class="muted">부족</span>'}</td>
+      <td class="muted">${why}</td>
+    </tr>`;
+  }).join('');
 
   box.innerHTML = `<div class="card">
     <h2 style="margin-top:0">지역별 대기 인원</h2>
-    <p class="muted">3:3 이 모여야 방이 열린다 — <b>여3 / 남3 이 최소선</b>이고,
-       한쪽만 쌓이면 열어도 방이 안 열린다. 여는 순서는 이 표의 성비로 정한다.</p>
+    <p class="muted">준비 중인 지역은 <b>여 ${need} · 남 ${need} 명 이상</b>이 모이고 장소가
+       <b>카페 2 · 식당 2</b> 이상이면 10분 안에 <b>자동으로 열린다</b>(어느 지역이든).
+       재회가 영구 금지라 첫 방이 깨져도 새 조합을 짤 풀이 있어야 한다(2026-10-01).
+       열리는 순간 그 지역 사람들이 줄을 서고 "지역이 열렸어요" 알림이 간다.</p>
     <table>
       <tr><th>지역</th><th>상태</th><th class="num">대기</th>
-          <th class="num">여</th><th class="num">남</th></tr>
-      ${rows || '<tr><td colspan="5" class="muted">아직 없어요</td></tr>'}
+          <th class="num">여</th><th class="num">남</th><th>장소</th><th>열리려면</th></tr>
+      ${rows || '<tr><td colspan="7" class="muted">아직 없어요</td></tr>'}
     </table>
     <p class="muted" style="margin-top:10px">
-      여는 방법(대시보드 SQL Editor):<br>
-      <code>select set_region_active('강남·서초', true);</code><br>
-      켜는 순간 그 지역 대기자가 다음 매칭 배치에 들어갑니다.
+      대기 인원은 쉬는 중·방 있는 사람을 뺀 수다. 열기 기준은 여기에 프로필 미완성·(인증 필수일 때)
+      미인증도 뺀다 — 그래서 표의 숫자가 기준을 넘어도 조금 늦게 열릴 수 있다.
+      기준 바꾸기: <code>app_config.region_open_min_per_gender</code>.
     </p>
   </div>`;
 }
