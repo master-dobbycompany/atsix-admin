@@ -620,7 +620,8 @@ async function loadStats() {
   ]);
   const { data: outcomes } = await sb.rpc('admin_room_outcomes', { p_days: 90 });
   const outTotal = (outcomes ?? []).reduce((n, o) => n + o.rooms, 0);
-  const outRows = (outcomes ?? []).map(o => ({ label: o.outcome, value: o.rooms,
+  // 북극성의 "완주"(6일 채움)와 헷갈리지 않게, 여기 완주는 "판정까지"(미팅 뒤 상호 선택까지 감)로 적는다.
+  const outRows = (outcomes ?? []).map(o => ({ label: o.outcome === '완주' ? '판정까지' : o.outcome, value: o.rooms,
     pct: outTotal ? Math.round(1000 * o.rooms / outTotal) / 10 : 0 }));
   const histRows = (hist ?? []).map(h => ({ label: h.label, value: h.count }));
   const signRows = (signups ?? []).map(d => ({ label: String(d.day).slice(5, 10).replace('-', '/'), a: d.female, b: d.male, day: String(d.day).slice(0, 10) }));
@@ -673,7 +674,7 @@ async function loadStats() {
 
     <div class="card">
       <h2 style="margin-top:0">방이 어떻게 끝났나 (최근 90일)</h2>
-      <p class="muted">방 ${outTotal}개. 완주 = 판정까지 감 · 미팅 무산 = 올 사람이 1명 이하였고 다시 모이지 못함 ·
+      <p class="muted">방 ${outTotal}개. 판정까지 = 6일 · 미팅 뒤 상호 선택 판정까지 감(북극성의 "완주" 보다 한 단계 뒤) · 미팅 무산 = 올 사람이 1명 이하였고 다시 모이지 못함 ·
          해산 = 한 명만 남음. 무산·해산이 늘면 [방] 탭에서 어디서 끊겼는지 본다. 테스트 지역 제외.</p>
       <div class="viz" id="vizOutcome">
         ${columnChart(outRows, { unit: '개' })}
