@@ -543,7 +543,8 @@ function columnChart(rows, { unit = '', fixedMax = null, labelEvery = 1 } = {}) 
     // 히트 영역은 막대보다 넓게(띠 전체)
     svg += `<rect class="hit" data-i="${i}" x="${L + band * i}" y="${T}" width="${band}" height="${H - T - B}" fill="transparent"/>`;
     if (i % labelEvery === 0) svg += `<text x="${cx}" y="${H - 8}" font-size="11" text-anchor="middle" fill="var(--ink-2)">${escapeHtml(r.label)}</text>`;
-    if (r.value === top && top > 0) svg += `<text x="${cx}" y="${y0 - 4}" font-size="11" text-anchor="middle" fill="var(--ink-1)">${r.value}${unit}</text>`;
+    // 최댓값은 처음 한 번만 적는다(동점이 여럿이면 숫자가 겹친다 — 나머지는 툴팁·표)
+    if (r.value === top && top > 0 && i === rows.findIndex(q => q.value === top)) svg += `<text x="${cx}" y="${y0 - 4}" font-size="11" text-anchor="middle" fill="var(--ink-1)">${r.value}${unit}</text>`;
   });
   svg += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="#C9C1B7" stroke-width="1"/></svg>`;
   return svg;
