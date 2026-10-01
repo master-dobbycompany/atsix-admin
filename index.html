@@ -382,7 +382,10 @@ async function loadPlaces() {
   const live = (rows ?? []).filter(r => r.active);
   const cafes = live.filter(r => r.category === '카페').length;
   const meals = live.filter(r => r.category === '식당').length;
-  const options = (regions ?? []).map(r =>
+  // 서울 생활권(이름에 · 가 있는 것) 먼저, 그 안은 가나다.
+  const sorted = [...(regions ?? [])].sort((a, b) =>
+    (b.region.includes('·') - a.region.includes('·')) || a.region.localeCompare(b.region, 'ko'));
+  const options = sorted.map(r =>
     `<option ${r.region === placesRegion ? 'selected' : ''}>${escapeHtml(r.region)}</option>`).join('');
   const list = (rows ?? []).map(r => `<tr class="${r.active ? '' : 'muted'}">
       <td>${r.category}</td>
