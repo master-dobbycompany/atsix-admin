@@ -49,6 +49,15 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
 .mem.out { opacity:.45; text-decoration:line-through; }
 #toast { position:fixed; left:16px; right:16px; bottom:16px; background:#1F1B16; color:#fff;
          padding:14px; border-radius:12px; text-align:center; }
+/* 그래프 (dataviz 기준: 한 축 · 얇은 막대 ≤24px · 둥근 끝 4px · 2px 선 · 헤어라인 격자 · 색은 역할로) */
+.viz { --series-1:#2a78d6; --series-2:#eb6834; --grid:#ECE8E1; --ink-2:#8A8178; --ink-1:#1F1B16; }
+.viz svg { width:100%; height:auto; display:block; overflow:visible; }
+.viz .legend { display:flex; gap:14px; font-size:12px; color:var(--ink-2); margin:2px 0 6px; }
+.viz .legend i { display:inline-block; width:14px; height:2px; vertical-align:middle; margin-right:5px; border-radius:1px; }
+.viz details { margin-top:6px; font-size:13px; }
+.viz summary { color:var(--ink-2); cursor:pointer; }
+#vizTip { position:fixed; pointer-events:none; background:#1F1B16; color:#fff; font-size:12px; line-height:1.45;
+  padding:6px 9px; border-radius:8px; z-index:50; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -101,6 +110,7 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
 </div>
 
 <div id="toast" class="hidden"></div>
+<div id="vizTip" class="hidden"></div>
 
 <script type="module">
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -487,6 +497,105 @@ async function loadConfig() {
 }
 
 // ---- 통계 ----
+
+// ---- 그래프: 막대(한 계열) · 선(여/남). 값은 툴팁과 표에, 숫자는 꼭 필요한 곳에만 ----
+const tipEl = () => $('vizTip');
+function showTip(e, html) {
+  const t = tipEl(); t.innerHTML = html; t.classList.remove('hidden');
+  const x = Math.min(e.clientX + 12, window.innerWidth - t.offsetWidth - 8);
+  t.style.left = x + 'px'; t.style.top = (e.clientY - t.offsetHeight - 10) + 'px';
+}
+function hideTip() { tipEl().classList.add('hidden'); }
+const niceMax = (v) => {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v))), n = v / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+};
+function tableView(rows, cols) {
+  return `<details><summary>표로 보기</summary><table>` +
+    `<tr>${cols.map(c => `<th class="${c[2] ? 'num' : ''}">${c[1]}</th>`).join('')}</tr>` +
+    rows.map(r => `<tr>${cols.map(c => `<td class="${c[2] ? 'num' : ''}">${r[c[0]] ?? '-'}</td>`).join('')}</tr>`).join('') +
+    `</table></details>`;
+}
+
+// 세로 막대. rows: [{label, value, tip}] · unit: 축·툴팁 단위 · fixedMax: 퍼센트면 100
+function columnChart(rows, { unit = '', fixedMax = null, labelEvery = 1 } = {}) {
+  if (!rows?.length) return '<p class="muted">데이터 없음</p>';
+  const W = 600, H = 190, L = 34, R = 6, T = 14, B = 26;
+  const max = fixedMax ?? niceMax(Math.max(...rows.map(r => r.value ?? 0)));
+  const band = (W - L - R) / rows.length, bw = Math.min(24, band * 0.6);
+  const y = (v) => T + (H - T - B) * (1 - (v ?? 0) / max);
+  const ticks = [0, max / 2, max];
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  for (const t of ticks) {
+    svg += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--grid)" stroke-width="1"/>` +
+      `<text x="${L - 6}" y="${y(t) + 4}" font-size="11" text-anchor="end" fill="var(--ink-2)">${Math.round(t * 10) / 10}</text>`;
+  }
+  const top = Math.max(...rows.map(r => r.value ?? 0));
+  rows.forEach((r, i) => {
+    const cx = L + band * i + band / 2, x0 = cx - bw / 2, y0 = y(r.value), base = y(0);
+    const h = Math.max(0, base - y0), rad = Math.min(4, h);
+    // 4px 둥근 데이터 끝, 바닥은 각지게
+    if (h > 0) svg += `<path d="M${x0},${base} V${y0 + rad} Q${x0},${y0} ${x0 + rad},${y0} H${x0 + bw - rad} Q${x0 + bw},${y0} ${x0 + bw},${y0 + rad} V${base} Z" fill="var(--series-1)"/>`;
+    // 히트 영역은 막대보다 넓게(띠 전체)
+    svg += `<rect class="hit" data-i="${i}" x="${L + band * i}" y="${T}" width="${band}" height="${H - T - B}" fill="transparent"/>`;
+    if (i % labelEvery === 0) svg += `<text x="${cx}" y="${H - 8}" font-size="11" text-anchor="middle" fill="var(--ink-2)">${escapeHtml(r.label)}</text>`;
+    if (r.value === top && top > 0) svg += `<text x="${cx}" y="${y0 - 4}" font-size="11" text-anchor="middle" fill="var(--ink-1)">${r.value}${unit}</text>`;
+  });
+  svg += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="#C9C1B7" stroke-width="1"/></svg>`;
+  return svg;
+}
+
+// 선 2개(여/남). rows: [{label, a, b}]
+function lineChart(rows, names = ['여', '남']) {
+  if (!rows?.length) return '<p class="muted">데이터 없음</p>';
+  const W = 600, H = 190, L = 34, R = 10, T = 14, B = 26;
+  const max = niceMax(Math.max(1, ...rows.flatMap(r => [r.a, r.b])));
+  const step = (W - L - R) / Math.max(1, rows.length - 1);
+  const x = (i) => L + step * i, y = (v) => T + (H - T - B) * (1 - v / max);
+  const path = (k) => rows.map((r, i) => `${i ? 'L' : 'M'}${x(i)},${y(r[k])}`).join(' ');
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  for (const t of [0, max / 2, max]) {
+    svg += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--grid)" stroke-width="1"/>` +
+      `<text x="${L - 6}" y="${y(t) + 4}" font-size="11" text-anchor="end" fill="var(--ink-2)">${Math.round(t)}</text>`;
+  }
+  const every = Math.ceil(rows.length / 6);
+  rows.forEach((r, i) => { if (i % every === 0 || i === rows.length - 1)
+    svg += `<text x="${x(i)}" y="${H - 8}" font-size="11" text-anchor="middle" fill="var(--ink-2)">${escapeHtml(r.label)}</text>`; });
+  svg += `<path d="${path('a')}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  svg += `<path d="${path('b')}" fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const last = rows.length - 1;
+  for (const [k, c] of [['a', 'var(--series-1)'], ['b', 'var(--series-2)']]) {
+    svg += `<circle cx="${x(last)}" cy="${y(rows[last][k])}" r="4" fill="${c}" stroke="#fff" stroke-width="2"/>`;
+  }
+  svg += `<line class="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="#C9C1B7" stroke-width="1" visibility="hidden"/>`;
+  svg += `<rect class="hitArea" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/></svg>`;
+  return `<div class="legend"><span><i style="background:var(--series-1)"></i>${names[0]}</span>` +
+         `<span><i style="background:var(--series-2)"></i>${names[1]}</span></div>` + svg;
+}
+
+// 툴팁 연결. 막대: rect.hit[data-i] · 선: 십자선 + 가장 가까운 날
+function wireColumn(el, rows, fmt) {
+  for (const h of el.querySelectorAll('rect.hit')) {
+    const r = rows[+h.dataset.i];
+    h.onmousemove = (e) => showTip(e, fmt(r));
+    h.onmouseleave = hideTip;
+  }
+}
+function wireLine(el, rows, fmt) {
+  const svg = el.querySelector('svg'), area = el.querySelector('.hitArea'), cross = el.querySelector('.cross');
+  if (!svg || !area) return;
+  area.onmousemove = (e) => {
+    const box = svg.getBoundingClientRect(), vx = (e.clientX - box.left) * 600 / box.width;
+    const step = (600 - 34 - 10) / Math.max(1, rows.length - 1);
+    const i = Math.max(0, Math.min(rows.length - 1, Math.round((vx - 34) / step)));
+    const cx = 34 + step * i;
+    cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('visibility', 'visible');
+    showTip(e, fmt(rows[i]));
+  };
+  area.onmouseleave = () => { cross.setAttribute('visibility', 'hidden'); hideTip(); };
+}
+
 async function loadStats() {
   const box = $('stats');
   box.innerHTML = '<div class="card muted">불러오는 중…</div>';
@@ -500,7 +609,14 @@ async function loadStats() {
 
   const m = s.meetings ?? {}, a = s.activation ?? {}, p = s.photo ?? {};
   // 대기 시간 — "웬만하면 하루 안에 방을 연다" (2026-10-01). 실패해도 나머지 통계는 그린다.
-  const { data: w } = await sb.rpc('admin_wait_stats');
+  const [{ data: w }, { data: hist }, { data: signups }] = await Promise.all([
+    sb.rpc('admin_wait_stats'), sb.rpc('admin_wait_histogram'), sb.rpc('admin_signup_trend', { p_days: 30 }),
+  ]);
+  const histRows = (hist ?? []).map(h => ({ label: h.label, value: h.count }));
+  const signRows = (signups ?? []).map(d => ({ label: d.day.slice(5).replace('-', '/'), a: d.female, b: d.male, day: d.day }));
+  const cohortRows = [...(s.cohorts ?? [])].reverse().map(c => ({
+    label: String(c.cohort_week).slice(5).replace('-', '/'), value: c.completion_rate_pct ?? 0, raw: c }));
+  const dayRows = (s.day_completion ?? []).map(d => ({ label: `${d.day_no}일`, value: d.completion_rate_pct ?? 0, raw: d }));
   const wm = w?.matched ?? {}, ww = w?.waiting ?? {};
   box.innerHTML = `
     <div class="card">
@@ -518,6 +634,20 @@ async function loadStats() {
         <tr><td>지금 24시간 넘게 기다리는 사람</td><td class="num"><b>${ww.over_24h ?? 0}</b></td></tr>
         <tr><td>지금 가장 오래 기다린 시간</td><td class="num">${ww.oldest_h ?? '-'}시간</td></tr>
       </table>
+      <div class="viz" id="vizWait" style="margin-top:12px">
+        <p class="muted" style="margin:0 0 4px">대기 시간 분포 (명, 최근 30일) — 오른쪽 두 칸(24시간+)이 비어야 한다</p>
+        ${columnChart(histRows, { unit: '명' })}
+        ${tableView(histRows, [['label', '대기'], ['value', '명', 1]])}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">일별 가입 (최근 30일)</h2>
+      <p class="muted">광고를 켠 뒤 유입과 성비가 어떻게 움직이는가. 한쪽 선만 오르면 그쪽 광고를 멈춘다(OPENING §5). 테스트 지역 제외.</p>
+      <div class="viz" id="vizSignup">
+        ${lineChart(signRows)}
+        ${tableView(signRows, [['day', '날짜'], ['a', '여', 1], ['b', '남', 1]])}
+      </div>
     </div>
     <div class="card">
       <h2 style="margin-top:0">미팅 결과</h2>
@@ -533,7 +663,8 @@ async function loadStats() {
 
     <div class="card">
       <h2 style="margin-top:0">북극성 · 주차별 완주율</h2>
-      <p class="muted">개설 후 완주할 시간이 부족한 방은 분모에서 뺀다.</p>
+      <p class="muted">개설 후 완주할 시간이 부족한 방은 분모에서 뺀다. 막대 = 주차별 완주율(%).</p>
+      <div class="viz" id="vizCohort">${columnChart(cohortRows, { unit: '%', fixedMax: 100 })}</div>
       ${table(s.cohorts, [['cohort_week', '주차'], ['rooms_opened', '개설', 1],
         ['rooms_mature', '판정가능', 1], ['rooms_completed', '완주', 1], ['completion_rate_pct', '완주율%', 1]])}
     </div>
@@ -550,6 +681,8 @@ async function loadStats() {
 
     <div class="card">
       <h2 style="margin-top:0">일차별 완료율 · 어디서 죽는가</h2>
+      <p class="muted">막대가 꺾이는 일차가 손볼 곳이다(%).</p>
+      <div class="viz" id="vizDays">${columnChart(dayRows, { unit: '%', fixedMax: 100 })}</div>
       ${table(s.day_completion, [['day_no', '일차'], ['rooms_reached', '도달', 1],
         ['rooms_completed', '완료', 1], ['completion_rate_pct', '완료율%', 1]])}
     </div>
@@ -565,6 +698,10 @@ async function loadStats() {
       ${table(s.exits, [['cohort_week', '주차'], ['memberships', '참여', 1],
         ['still_active', '유지', 1], ['left_voluntarily', '나감', 1], ['expelled', '방출', 1]])}
     </div>`;
+  wireColumn($('vizWait'), histRows, r => `${r.label}<br><b>${r.value}명</b>`);
+  wireLine($('vizSignup'), signRows, r => `${r.day}<br>여 <b>${r.a}</b> · 남 <b>${r.b}</b>`);
+  wireColumn($('vizCohort'), cohortRows, r => `${r.raw.cohort_week} 주<br>완주 <b>${r.value}%</b> (${r.raw.rooms_completed}/${r.raw.rooms_mature})`);
+  wireColumn($('vizDays'), dayRows, r => `${r.label}차<br>완료 <b>${r.value}%</b> (${r.raw.rooms_completed}/${r.raw.rooms_reached})`);
 }
 
 function renderContext(ctx, roomRows, r) {
