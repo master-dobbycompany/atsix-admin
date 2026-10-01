@@ -358,7 +358,26 @@ async function loadStats() {
       `<td class="${c[2] ? 'num' : ''}">${r[c[0]] ?? '-'}</td>`).join('')}</tr>`).join('') + '</table>';
 
   const m = s.meetings ?? {}, a = s.activation ?? {}, p = s.photo ?? {};
+  // 대기 시간 — "웬만하면 하루 안에 방을 연다" (2026-10-01). 실패해도 나머지 통계는 그린다.
+  const { data: w } = await sb.rpc('admin_wait_stats');
+  const wm = w?.matched ?? {}, ww = w?.waiting ?? {};
   box.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0">대기 시간 · 하루 안에 방이 열리는가</h2>
+      <p class="muted">줄에 선 뒤 방에 들어가기까지(최근 30일, 테스트 지역 제외). 준비 중 지역에서 기다린 시간은
+         여기 없다 — [지역] 탭. 24시간을 넘는 비율이 오르면 완화 설정(interest_relax_after_hours ·
+         age_widen_after_hours)이나 유입을 본다.</p>
+      <table>
+        <tr><td>방에 들어간 사람</td><td class="num"><b>${wm.count ?? 0}</b></td></tr>
+        <tr><td>대기 중앙값</td><td class="num"><b>${wm.median_h ?? '-'}</b>시간</td></tr>
+        <tr><td>90% 가 이 안에</td><td class="num">${wm.p90_h ?? '-'}시간</td></tr>
+        <tr><td>24시간 넘게 기다린 비율</td><td class="num"><b>${wm.over_24h_pct ?? '-'}%</b></td></tr>
+        <tr><td>중앙값 여 / 남</td><td class="num">${wm.female_median_h ?? '-'} / ${wm.male_median_h ?? '-'}시간</td></tr>
+        <tr><td>지금 줄에 선 사람</td><td class="num">${ww.count ?? 0}</td></tr>
+        <tr><td>지금 24시간 넘게 기다리는 사람</td><td class="num"><b>${ww.over_24h ?? 0}</b></td></tr>
+        <tr><td>지금 가장 오래 기다린 시간</td><td class="num">${ww.oldest_h ?? '-'}시간</td></tr>
+      </table>
+    </div>
     <div class="card">
       <h2 style="margin-top:0">미팅 결과</h2>
       <table>
