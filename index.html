@@ -25,7 +25,7 @@ button:disabled { opacity:.5; }
 .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700;
         background:#F3EEE8; color:#8A8178; }
 .pill.hot { background:#FBE9E9; color:#C0392B; }
-.stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; text-align:center; }
+.stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; text-align:center; }
 .stats div b { display:block; font-size:22px; }
 .msg { background:#F3EEE8; border-radius:10px; padding:10px; margin:8px 0; font-size:14px; white-space:pre-wrap; }
 .ctx { font-size:13px; margin-top:10px; }
@@ -73,6 +73,7 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
         <div><b id="sReports">-</b><span class="muted">미처리 신고</span></div>
         <div><b id="sQueue">-</b><span class="muted">대기 (여/남)</span></div>
         <div><b id="sRooms">-</b><span class="muted">활성 방</span></div>
+        <div><b id="sLongWait">-</b><span class="muted">24시간+ 대기</span></div>
       </div>
       <div style="height:10px"></div>
       <div class="row">
@@ -86,12 +87,16 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
       <button id="tabRooms">방</button>
       <button id="tabStats">통계</button>
       <button id="tabRegions">지역</button>
+      <button id="tabPlaces">장소</button>
+      <button id="tabConfig">설정</button>
     </div>
 
     <div id="reports"></div>
     <div id="rooms" class="hidden"></div>
     <div id="stats" class="hidden"></div>
     <div id="regions" class="hidden"></div>
+    <div id="places" class="hidden"></div>
+    <div id="config" class="hidden"></div>
   </div>
 </div>
 
@@ -183,6 +188,9 @@ function render(d) {
   $('sReports').textContent = d.open_reports ?? 0;
   $('sQueue').textContent = `${d.queue_female ?? 0}/${d.queue_male ?? 0}`;
   $('sRooms').textContent = d.active_rooms ?? 0;
+  sb.rpc('admin_wait_stats').then(({ data }) => {
+    $('sLongWait').textContent = data?.waiting?.over_24h ?? '-';
+  });
 }
 
 async function loadReports() {
@@ -323,6 +331,8 @@ async function loadRegions() {
       <td class="num">${r.male}</td>
       <td>${r.places_ready ? '2·2 ✓' : '<span class="muted">부족</span>'}</td>
       <td class="muted">${why}</td>
+      <td><button class="ghost regionToggle" data-region="${escapeHtml(r.region)}" data-on="${r.active ? 0 : 1}"
+          style="padding:6px 10px">${r.active ? '끄기' : '켜기'}</button></td>
     </tr>`;
   }).join('');
 
@@ -334,15 +344,143 @@ async function loadRegions() {
        열리는 순간 그 지역 사람들이 줄을 서고 "지역이 열렸어요" 알림이 간다.</p>
     <table>
       <tr><th>지역</th><th>상태</th><th class="num">대기</th>
-          <th class="num">여</th><th class="num">남</th><th>장소</th><th>열리려면</th></tr>
-      ${rows || '<tr><td colspan="7" class="muted">아직 없어요</td></tr>'}
+          <th class="num">여</th><th class="num">남</th><th>장소</th><th>열리려면</th><th></th></tr>
+      ${rows || '<tr><td colspan="8" class="muted">아직 없어요</td></tr>'}
     </table>
     <p class="muted" style="margin-top:10px">
       대기 인원은 쉬는 중·방 있는 사람을 뺀 수다. 열기 기준은 여기에 프로필 미완성·(인증 필수일 때)
       미인증도 뺀다 — 그래서 표의 숫자가 기준을 넘어도 조금 늦게 열릴 수 있다.
-      기준 바꾸기: <code>app_config.region_open_min_per_gender</code>.
+      기준 바꾸기: [설정] 탭.
     </p>
   </div>`;
+  for (const b of box.querySelectorAll('.regionToggle')) {
+    b.onclick = async () => {
+      const on = b.dataset.on === '1', region = b.dataset.region;
+      const msg = on
+        ? `${region} 을(를) 켭니다. 그 지역을 고른 사람이 바로 줄을 서고 "지역이 열렸어요" 알림이 갑니다.`
+        : `${region} 을(를) 끕니다. 그 지역 대기열이 비워집니다(진행 중인 방은 그대로).`;
+      if (!confirm(msg)) return;
+      b.disabled = true;
+      const { error } = await sb.rpc('admin_set_region_active', { p_region: region, p_on: on });
+      if (error) { toast(error.message); b.disabled = false; return; }
+      toast(on ? '켰어요' : '껐어요');
+      await loadRegions();
+    };
+  }
+}
+
+// ---- 장소: 지역별 풀. 방마다 카페 2 · 식당 2 를 보여 주므로 지역이 열리려면 2·2 이상 ----
+let placesRegion = '강남·서초';
+async function loadPlaces() {
+  const box = $('places');
+  box.innerHTML = '<div class="card muted">불러오는 중…</div>';
+  const [{ data: regions }, { data: rows, error }] = await Promise.all([
+    sb.rpc('admin_region_demand'),
+    sb.rpc('admin_places', { p_region: placesRegion }),
+  ]);
+  if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
+  const live = (rows ?? []).filter(r => r.active);
+  const cafes = live.filter(r => r.category === '카페').length;
+  const meals = live.filter(r => r.category === '식당').length;
+  const options = (regions ?? []).map(r =>
+    `<option ${r.region === placesRegion ? 'selected' : ''}>${escapeHtml(r.region)}</option>`).join('');
+  const list = (rows ?? []).map(r => `<tr class="${r.active ? '' : 'muted'}">
+      <td>${r.category}</td>
+      <td><b>${escapeHtml(r.name)}</b>${r.is_partner ? ' <span class="muted">제휴</span>' : ''}<br>
+          <span class="muted">${escapeHtml(r.description ?? '')}</span></td>
+      <td class="muted">${escapeHtml(r.address ?? '')}<br>${escapeHtml(r.phone ?? '')}</td>
+      <td><button class="ghost placeToggle" data-id="${r.id}" data-on="${r.active ? 0 : 1}"
+          style="padding:6px 10px">${r.active ? '숨기기' : '다시 쓰기'}</button></td>
+    </tr>`).join('');
+  box.innerHTML = `
+    <div class="card">
+      <div class="row"><select id="placesRegion" style="flex:1;padding:10px;border-radius:12px">${options}</select></div>
+      <p>쓰는 장소 <b>카페 ${cafes} · 식당 ${meals}</b>
+         ${cafes >= 2 && meals >= 2 ? '— 지역을 열 수 있어요' : '— <b>2·2 가 안 되면 사람이 모여도 지역이 안 열려요</b>'}</p>
+      <table><tr><th>종류</th><th>이름 · 한 줄</th><th>주소 · 전화</th><th></th></tr>
+        ${list || '<tr><td colspan="4" class="muted">아직 없어요</td></tr>'}</table>
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">장소 넣기</h2>
+      <p class="muted">넣기 전에 확인: ① 지금 영업 중 ② 6명이 앉을 수 있음 ③ 전화 ④ 토 18시에 엶 ⑤ 술집 아님.
+         한 줄에는 <b>역 이름</b>을 넣는다(예: "강남역 · 넓은 베이커리 카페"). 후보는 docs/PLACES_SURVEY.md.
+         사진·메뉴·후기는 넣지 않는다. 제휴 배지는 여기서 켜지 않는다.</p>
+      <div class="row">
+        <select id="pCategory" style="padding:10px;border-radius:12px"><option>카페</option><option>식당</option></select>
+        <input id="pName" placeholder="이름" style="flex:1;min-width:160px">
+      </div>
+      <div style="height:8px"></div>
+      <input id="pDesc" placeholder="한 줄 (역 이름 포함)">
+      <div style="height:8px"></div>
+      <div class="row">
+        <input id="pAddr" placeholder="주소" style="flex:2;min-width:200px">
+        <input id="pPhone" placeholder="전화" style="flex:1;min-width:120px">
+      </div>
+      <div style="height:10px"></div>
+      <button id="pAdd" style="width:100%">${escapeHtml(placesRegion)} 에 넣기</button>
+    </div>`;
+  $('placesRegion').onchange = (e) => { placesRegion = e.target.value; loadPlaces(); };
+  for (const b of box.querySelectorAll('.placeToggle')) {
+    b.onclick = async () => {
+      b.disabled = true;
+      const { error } = await sb.rpc('admin_place_set_active', { p_place: b.dataset.id, p_on: b.dataset.on === '1' });
+      if (error) { toast(error.message); b.disabled = false; return; }
+      await loadPlaces();
+    };
+  }
+  $('pAdd').onclick = async () => {
+    const btn = $('pAdd');
+    btn.disabled = true;
+    const { error } = await sb.rpc('admin_place_add', {
+      p_region: placesRegion, p_category: $('pCategory').value, p_name: $('pName').value,
+      p_description: $('pDesc').value, p_address: $('pAddr').value, p_phone: $('pPhone').value,
+    });
+    if (error) { toast(error.message); btn.disabled = false; return; }
+    toast('넣었어요');
+    await loadPlaces();
+  };
+}
+
+// ---- 설정: 매칭 완화·지역 열기 기준. 정해 둔 키만, 범위 안에서만 (서버가 막는다) ----
+async function loadConfig() {
+  const box = $('config');
+  box.innerHTML = '<div class="card muted">불러오는 중…</div>';
+  const [{ data: cfg, error }, { data: hist }] = await Promise.all([
+    sb.rpc('admin_config'), sb.rpc('admin_config_history', { p_limit: 10 }),
+  ]);
+  if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
+  const rows = (cfg ?? []).map(c => `<tr>
+      <td>${escapeHtml(c.label)}<br><span class="muted">${c.key} · ${c.min}~${c.max}</span></td>
+      <td style="width:90px"><input class="cfgVal" data-key="${c.key}" type="number" min="${c.min}" max="${c.max}"
+          value="${c.value}" style="padding:8px"></td>
+      <td><button class="ghost cfgSave" data-key="${c.key}" style="padding:6px 10px">저장</button></td>
+    </tr>`).join('');
+  const histRows = (hist ?? []).map(h => `<tr><td>${escapeHtml(h.key)}</td>
+      <td class="num">${h.old ?? '-'} → <b>${h.new}</b></td>
+      <td class="muted">${escapeHtml(h.by ?? '')} · ${new Date(h.at).toLocaleString('ko-KR')}</td></tr>`).join('');
+  box.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0">매칭 · 지역 설정</h2>
+      <p class="muted">초기엔 널널하게, 사람이 많아지면 조인다(AGENTS 규칙 1). 바꾸면 다음 매칭 배치(1분)부터 적용.
+         조이기 전에 [통계] 「대기 시간」 의 24시간 초과 비율을 본다. 지역·성비 3:3·안전 규칙은 여기 없다 — 풀지 않는다.</p>
+      <table>${rows}</table>
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">바꾼 기록</h2>
+      <table>${histRows || '<tr><td class="muted">아직 없어요</td></tr>'}</table>
+    </div>`;
+  for (const b of box.querySelectorAll('.cfgSave')) {
+    b.onclick = async () => {
+      const input = box.querySelector(`.cfgVal[data-key="${b.dataset.key}"]`);
+      const v = parseInt(input.value, 10);
+      if (!confirm(`${b.dataset.key} 를 ${v} 로 바꿀까요?`)) return;
+      b.disabled = true;
+      const { error } = await sb.rpc('admin_set_config', { p_key: b.dataset.key, p_value: v });
+      if (error) { toast(error.message); b.disabled = false; return; }
+      toast('저장했어요');
+      await loadConfig();
+    };
+  }
 }
 
 // ---- 통계 ----
@@ -502,7 +640,8 @@ function escapeHtml(s) {
 }
 
 // 탭. 들어갈 때만 불러온다 — 신고 처리하러 열었는데 통계 쿼리까지 도는 건 낭비다.
-const TABS = { reports: loadReports, rooms: loadRooms, stats: loadStats, regions: loadRegions };
+const TABS = { reports: loadReports, rooms: loadRooms, stats: loadStats, regions: loadRegions,
+               places: loadPlaces, config: loadConfig };
 let tab = 'reports';
 
 async function showTab(name) {
@@ -517,6 +656,8 @@ $('tabReports').onclick = () => showTab('reports');
 $('tabRooms').onclick = () => showTab('rooms');
 $('tabStats').onclick = () => showTab('stats');
 $('tabRegions').onclick = () => showTab('regions');
+$('tabPlaces').onclick = () => showTab('places');
+$('tabConfig').onclick = () => showTab('config');
 
 $('loginBtn').onclick = login;
 $('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
