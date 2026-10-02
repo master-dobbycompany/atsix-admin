@@ -403,7 +403,7 @@ async function loadPlaces() {
           <span class="muted">${escapeHtml(r.description ?? '')}</span></td>
       <td class="muted">${escapeHtml(r.address ?? '')}<br>${escapeHtml(r.phone ?? '')}</td>
       <td><button class="ghost placeToggle" data-id="${r.id}" data-on="${r.active ? 0 : 1}"
-          style="padding:6px 10px">${r.active ? '숨기기' : '다시 쓰기'}</button></td>
+          style="padding:6px 10px">${r.active ? '숨기기' : '쓰기'}</button></td>
     </tr>`).join('');
   box.innerHTML = `
     <div class="card">
@@ -417,7 +417,8 @@ async function loadPlaces() {
       <h2 style="margin-top:0">장소 넣기</h2>
       <p class="muted">넣기 전에 확인: ① 지금 영업 중 ② 6명이 앉을 수 있음 ③ 전화 ④ 토 18시에 엶 ⑤ 술집 아님.
          한 줄에는 <b>역 이름</b>을 넣는다(예: "강남역 · 넓은 베이커리 카페"). 후보는 docs/PLACES_SURVEY.md.
-         사진·메뉴·후기는 넣지 않는다. 제휴 배지는 여기서 켜지 않는다.</p>
+         사진·메뉴·후기는 넣지 않는다. 제휴 배지는 여기서 켜지 않는다.
+         조사한 후보는 위 목록에 <b>숨김</b>으로 미리 들어 있다(흐린 줄) — 확인한 곳만 「쓰기」.</p>
       <div class="row">
         <select id="pCategory" style="padding:10px;border-radius:12px"><option>카페</option><option>식당</option></select>
         <input id="pName" placeholder="이름" style="flex:1;min-width:160px">
@@ -435,6 +436,10 @@ async function loadPlaces() {
   $('placesRegion').onchange = (e) => { placesRegion = e.target.value; loadPlaces(); };
   for (const b of box.querySelectorAll('.placeToggle')) {
     b.onclick = async () => {
+      // 쓰기 전에 다섯 가지를 다시 묻는다 — 숨김 후보는 문서에서 옮겨 온 미검증 목록이다(2026-10-02).
+      if (b.dataset.on === '1' && !confirm('이 장소를 미팅 화면에 띄울까요?
+
+확인했나요: ① 지금 영업 중 ② 6명이 앉을 수 있음(또는 예약) ③ 전화 ④ 토 18시에 엶 ⑤ 술집 아님')) return;
       b.disabled = true;
       const { error } = await sb.rpc('admin_place_set_active', { p_place: b.dataset.id, p_on: b.dataset.on === '1' });
       if (error) { toast(error.message); b.disabled = false; return; }
