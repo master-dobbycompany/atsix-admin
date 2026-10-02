@@ -437,9 +437,7 @@ async function loadPlaces() {
   for (const b of box.querySelectorAll('.placeToggle')) {
     b.onclick = async () => {
       // 쓰기 전에 다섯 가지를 다시 묻는다 — 숨김 후보는 문서에서 옮겨 온 미검증 목록이다(2026-10-02).
-      if (b.dataset.on === '1' && !confirm('이 장소를 미팅 화면에 띄울까요?
-
-확인했나요: ① 지금 영업 중 ② 6명이 앉을 수 있음(또는 예약) ③ 전화 ④ 토 18시에 엶 ⑤ 술집 아님')) return;
+      if (b.dataset.on === '1' && !confirm('이 장소를 미팅 화면에 띄울까요?\n\n확인했나요: ① 지금 영업 중 ② 6명이 앉을 수 있음(또는 예약) ③ 전화 ④ 토 18시에 엶 ⑤ 술집 아님')) return;
       b.disabled = true;
       const { error } = await sb.rpc('admin_place_set_active', { p_place: b.dataset.id, p_on: b.dataset.on === '1' });
       if (error) { toast(error.message); b.disabled = false; return; }
