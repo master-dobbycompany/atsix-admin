@@ -9,7 +9,8 @@
 /* 폰에서 한 손으로 쓰는 것이 목적이다. 밤에 신고가 오면 PC 앞에 없다. */
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 body { font-family:"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
-       background:#FAF8F5; color:#1F1B16; line-height:1.6; font-size:16px; padding-bottom:40px; }
+       background:#FAF8F5; color:#1F1B16; line-height:1.6; font-size:16px; padding-bottom:40px;
+       word-break:keep-all; }
 .wrap { max-width:720px; margin:0 auto; padding:16px; }
 h1 { font-size:20px; font-weight:800; margin-bottom:12px; }
 .card { background:#fff; border:1px solid #E5DFD8; border-radius:16px; padding:16px; margin-bottom:12px; }
@@ -27,6 +28,7 @@ button:disabled { opacity:.5; }
 .pill.hot { background:#FBE9E9; color:#C0392B; }
 .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; text-align:center; }
 .stats div b { display:block; font-size:22px; }
+.stats .muted { word-break:keep-all; }
 .msg { background:#F3EEE8; border-radius:10px; padding:10px; margin:8px 0; font-size:14px; white-space:pre-wrap; }
 .ctx { font-size:13px; margin-top:10px; }
 .ctxList { max-height:320px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -35,10 +37,18 @@ button:disabled { opacity:.5; }
 .ctxList p.fromTarget b { color:#C0392B; }
 .ctxList p.hit { background:#FBE9E9; margin:0 -8px; padding:8px; border-radius:8px; }
 .hidden { display:none; }
-.tabs { display:flex; gap:6px; margin-bottom:12px; }
-.tabs button { flex:1; background:#fff; color:#8A8178; border:1px solid #E5DFD8; }
+.tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.tabs button { flex:1; white-space:nowrap; padding:10px 8px; background:#fff; color:#8A8178; border:1px solid #E5DFD8; }
 .tabs button.on { background:#1F1B16; color:#fff; border-color:#1F1B16; }
+@media (max-width:520px) {
+  .tabs button { flex:1 1 30%; }
+  .stats { grid-template-columns:1fr 1fr; row-gap:12px; }
+}
 table { width:100%; border-collapse:collapse; font-size:13px; }
+.wideWrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.wideWrap th, .wideWrap td { white-space:nowrap; }
+.line { padding:12px 0; border-top:1px solid #F3EEE8; }
+.line:first-of-type { border-top:0; padding-top:2px; }
 th, td { border-bottom:1px solid #F3EEE8; padding:6px 4px; text-align:left; }
 th { color:#8A8178; font-weight:700; }
 td.num, th.num { text-align:right; }
@@ -139,6 +149,17 @@ const ACTIONS = [
   ['removed_from_room', '방에서 제외', ''],
   ['suspended', '이용 정지', 'warn'],
 ];
+const ROOM_STATUS = { active: '대화 중', meeting_unlocked: '미팅 중', closed: '종료' };
+const MEET_STATUS = {
+  scheduling: '시간 정하는 중', confirmed: '시간 확정', done: '판정 완료', cancelled: '무산',
+};
+function koStatus(map, code) { return map[code] ?? code ?? ''; }
+function when(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('ko-KR', {
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
 
 function toast(text) {
   const t = $('toast');
@@ -222,8 +243,8 @@ function card(r) {
   const hot = r.hours_open >= 24;
   el.innerHTML = `
     <div class="row" style="justify-content:space-between; align-items:center">
-      <span class="pill ${hot ? 'hot' : ''}">${r.hours_open}시간 경과</span>
-      <span class="muted">${new Date(r.created_at).toLocaleString('ko-KR')}</span>
+      <span class="pill ${hot ? 'hot' : ''}">${Math.round(r.hours_open)}시간 경과</span>
+      <span class="muted">${when(r.created_at)}</span>
     </div>
     <p style="margin-top:8px"><b>${escapeHtml(r.reported ?? '(탈퇴)')}</b> 님을
        <b>${escapeHtml(REASONS[r.reason_code] ?? r.reason_code)}</b> 로 신고
@@ -296,12 +317,14 @@ async function loadRooms() {
                 : m.left ? ' (나감)' : '';
       return `<span class="${cls}">${escapeHtml(m.nickname)} ${escapeHtml(m.age_band ?? '')}${mark}${why}</span>`;
     }).join('');
+    // 계정을 지우면 room_members 도 같이 지워진다. 빈 칸으로 두지 않는다.
+    const people = mem || '<span class="muted">구성원 기록이 없어요</span>';
 
     const mt = r.meeting;
     const meeting = !mt
       ? '<p class="muted">미팅 아직 안 열림</p>'
-      : `<p>미팅 <b>${mt.status}</b>
-           ${mt.meets_at ? `· ${new Date(mt.meets_at).toLocaleString('ko-KR')}` : ''}
+      : `<p>미팅 <b>${escapeHtml(koStatus(MEET_STATUS, mt.status))}</b>
+           ${mt.meets_at ? `· ${when(mt.meets_at)}` : ''}
            ${mt.settled ? `· 참석 <b>${mt.attendees}</b>명 · 1:1 <b>${mt.dm_threads}</b>쌍
               ${mt.absence_notices ? `· 사전불참 ${mt.absence_notices}` : ''}`
              : '<span class="muted"> (판정 전)</span>'}</p>`;
@@ -312,8 +335,8 @@ async function loadRooms() {
         <span class="muted">${new Date(r.started_at).toLocaleDateString('ko-KR')} 개설</span>
       </div>
       <p class="muted">${r.elapsed_days}일차 · 미션 ${r.completed_days}/${r.required_days} 완료
-         · 활성 ${r.active_members}명 · ${escapeHtml(r.status)}</p>
-      <div style="margin:6px 0">${mem}</div>
+         · 활성 ${r.active_members}명 · ${escapeHtml(koStatus(ROOM_STATUS, r.status))}</p>
+      <div style="margin:6px 0">${people}</div>
       ${meeting}
     </div>`;
   }).join('');
@@ -333,17 +356,19 @@ async function loadRegions() {
       : (r.female < need || r.male < need) ? `여 ${Math.max(0, need - r.female)} · 남 ${Math.max(0, need - r.male)} 더`
       : !r.places_ready ? '<b>장소 부족</b>(카페 2 · 식당 2)'
       : '다음 배치에 열림';
-    return `<tr>
-      <td>${escapeHtml(r.region)}</td>
-      <td>${r.active ? '<b>열림</b>' : '<span class="muted">준비 중</span>'}</td>
-      <td class="num"><b>${r.waiting}</b></td>
-      <td class="num">${r.female}</td>
-      <td class="num">${r.male}</td>
-      <td>${r.places_ready ? '2·2 ✓' : '<span class="muted">부족</span>'}</td>
-      <td class="muted">${why}</td>
-      <td><button class="ghost regionToggle" data-region="${escapeHtml(r.region)}" data-on="${r.active ? 0 : 1}"
-          style="padding:6px 10px">${r.active ? '끄기' : '켜기'}</button></td>
-    </tr>`;
+    return `<div class="line">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <b>${escapeHtml(r.region)}</b>
+        <span>${r.active ? '<b>열림</b>' : '<span class="muted">준비 중</span>'}</span>
+      </div>
+      <p class="muted" style="margin:4px 0">대기 <b>${r.waiting}</b> · 여 ${r.female} · 남 ${r.male}
+         · ${r.places_ready ? '장소 2·2' : '장소 부족'}</p>
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <span class="muted">${why}</span>
+        <button class="ghost regionToggle" data-region="${escapeHtml(r.region)}" data-on="${r.active ? 0 : 1}"
+            style="padding:8px 14px; white-space:nowrap">${r.active ? '끄기' : '켜기'}</button>
+      </div>
+    </div>`;
   }).join('');
 
   box.innerHTML = `<div class="card">
@@ -352,11 +377,7 @@ async function loadRegions() {
        <b>카페 2 · 식당 2</b> 이상이면 10분 안에 <b>자동으로 열린다</b>(어느 지역이든).
        재회가 영구 금지라 첫 방이 깨져도 새 조합을 짤 풀이 있어야 한다(2026-10-01).
        열리는 순간 그 지역 사람들이 줄을 서고 "지역이 열렸어요" 알림이 간다.</p>
-    <table>
-      <tr><th>지역</th><th>상태</th><th class="num">대기</th>
-          <th class="num">여</th><th class="num">남</th><th>장소</th><th>열리려면</th><th></th></tr>
-      ${rows || '<tr><td colspan="8" class="muted">아직 없어요</td></tr>'}
-    </table>
+    ${rows || '<p class="muted">아직 없어요</p>'}
     <p class="muted" style="margin-top:10px">
       대기 인원은 쉬는 중·방 있는 사람을 뺀 수다. 열기 기준은 여기에 프로필 미완성·(인증 필수일 때)
       미인증도 뺀다 — 그래서 표의 숫자가 기준을 넘어도 조금 늦게 열릴 수 있다.
@@ -397,21 +418,23 @@ async function loadPlaces() {
     (b.region.includes('·') - a.region.includes('·')) || a.region.localeCompare(b.region, 'ko'));
   const options = sorted.map(r =>
     `<option ${r.region === placesRegion ? 'selected' : ''}>${escapeHtml(r.region)}</option>`).join('');
-  const list = (rows ?? []).map(r => `<tr class="${r.active ? '' : 'muted'}">
-      <td>${r.category}</td>
-      <td><b>${escapeHtml(r.name)}</b>${r.is_partner ? ' <span class="muted">제휴</span>' : ''}<br>
-          <span class="muted">${escapeHtml(r.description ?? '')}</span></td>
-      <td class="muted">${escapeHtml(r.address ?? '')}<br>${escapeHtml(r.phone ?? '')}</td>
-      <td><button class="ghost placeToggle" data-id="${r.id}" data-on="${r.active ? 0 : 1}"
-          style="padding:6px 10px">${r.active ? '숨기기' : '쓰기'}</button></td>
-    </tr>`).join('');
+  const list = (rows ?? []).map(r => `<div class="line ${r.active ? '' : 'muted'}">
+      <div class="row" style="justify-content:space-between; align-items:flex-start">
+        <div style="flex:1; min-width:0">
+          <b>${escapeHtml(r.name)}</b>${r.is_partner ? ' <span class="muted">제휴</span>' : ''}
+          <p class="muted" style="margin:2px 0">${escapeHtml(r.category)} · ${escapeHtml(r.description ?? '')}</p>
+          <p class="muted">${escapeHtml(r.address ?? '')}${r.phone ? ' · ' + escapeHtml(r.phone) : ''}</p>
+        </div>
+        <button class="ghost placeToggle" data-id="${r.id}" data-on="${r.active ? 0 : 1}"
+            style="padding:8px 14px; white-space:nowrap">${r.active ? '숨기기' : '쓰기'}</button>
+      </div>
+    </div>`).join('');
   box.innerHTML = `
     <div class="card">
       <div class="row"><select id="placesRegion" style="flex:1;padding:10px;border-radius:12px">${options}</select></div>
       <p>쓰는 장소 <b>카페 ${cafes} · 식당 ${meals}</b>
          ${cafes >= 2 && meals >= 2 ? '— 지역을 열 수 있어요' : '— <b>2·2 가 안 되면 사람이 모여도 지역이 안 열려요</b>'}</p>
-      <table><tr><th>종류</th><th>이름 · 한 줄</th><th>주소 · 전화</th><th></th></tr>
-        ${list || '<tr><td colspan="4" class="muted">아직 없어요</td></tr>'}</table>
+      ${list || '<p class="muted">아직 없어요</p>'}
     </div>
     <div class="card">
       <h2 style="margin-top:0">장소 넣기</h2>
@@ -465,25 +488,29 @@ async function loadConfig() {
     sb.rpc('admin_config'), sb.rpc('admin_config_history', { p_limit: 10 }),
   ]);
   if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
-  const rows = (cfg ?? []).map(c => `<tr>
-      <td>${escapeHtml(c.label)}<br><span class="muted">${c.key} · ${c.min}~${c.max}</span></td>
-      <td style="width:90px"><input class="cfgVal" data-key="${c.key}" type="number" min="${c.min}" max="${c.max}"
-          value="${c.value}" style="padding:8px"></td>
-      <td><button class="ghost cfgSave" data-key="${c.key}" style="padding:6px 10px">저장</button></td>
-    </tr>`).join('');
-  const histRows = (hist ?? []).map(h => `<tr><td>${escapeHtml(h.key)}</td>
-      <td class="num">${h.old ?? '-'} → <b>${h.new}</b></td>
-      <td class="muted">${escapeHtml(h.by ?? '')} · ${new Date(h.at).toLocaleString('ko-KR')}</td></tr>`).join('');
+  const rows = (cfg ?? []).map(c => `<div class="line">
+      <div>${escapeHtml(c.label)}<br><span class="muted">${escapeHtml(c.key)} · ${c.min}~${c.max}</span></div>
+      <div class="row" style="margin-top:8px; align-items:center">
+        <input class="cfgVal" data-key="${escapeHtml(c.key)}" type="number" min="${c.min}" max="${c.max}"
+            value="${c.value}" style="width:120px; padding:8px">
+        <button class="ghost cfgSave" data-key="${escapeHtml(c.key)}" style="padding:8px 14px; white-space:nowrap">저장</button>
+      </div>
+    </div>`).join('');
+  const histRows = (hist ?? []).map(h => `<div class="line">
+      <b>${escapeHtml(h.key)}</b>
+      <p>${h.old ?? '-'} → <b>${h.new}</b></p>
+      <p class="muted">${escapeHtml(h.by ?? '')} · ${when(h.at)}</p>
+    </div>`).join('');
   box.innerHTML = `
     <div class="card">
       <h2 style="margin-top:0">매칭 · 지역 설정</h2>
       <p class="muted">초기엔 널널하게, 사람이 많아지면 조인다(AGENTS 규칙 1). 바꾸면 다음 매칭 배치(1분)부터 적용.
          조이기 전에 [통계] 「대기 시간」 의 24시간 초과 비율을 본다. 지역·성비 3:3·안전 규칙은 여기 없다 — 풀지 않는다.</p>
-      <table>${rows}</table>
+      ${rows}
     </div>
     <div class="card">
       <h2 style="margin-top:0">바꾼 기록</h2>
-      <table>${histRows || '<tr><td class="muted">아직 없어요</td></tr>'}</table>
+      ${histRows || '<p class="muted">아직 없어요</p>'}
     </div>`;
   for (const b of box.querySelectorAll('.cfgSave')) {
     b.onclick = async () => {
@@ -522,11 +549,12 @@ function tableView(rows, cols) {
 }
 
 // 세로 막대. rows: [{label, value, tip}] · unit: 축·툴팁 단위 · fixedMax: 퍼센트면 100
-function columnChart(rows, { unit = '', fixedMax = null, labelEvery = null } = {}) {
+function columnChart(rows, { unit = '', fixedMax = null, labelEvery = null, width = 600 } = {}) {
   if (!rows?.length) return '<p class="muted">데이터 없음</p>';
+  // 그리는 너비 = 화면 너비. viewBox 를 600 으로 고정하면 폰에서 글자가 6px 로 줄어든다.
+  const W = Math.max(280, width), H = 190, L = 34, R = 6, T = 14, B = 26;
   // 막대가 많으면 x 라벨을 건너뛴다(겹치면 아무것도 못 읽는다). 값은 툴팁·표에 다 있다.
-  labelEvery = labelEvery ?? Math.ceil(rows.length / 12);
-  const W = 600, H = 190, L = 34, R = 6, T = 14, B = 26;
+  labelEvery = labelEvery ?? Math.ceil(rows.length / Math.max(4, Math.floor((W - L - R) / 48)));
   const max = fixedMax ?? niceMax(Math.max(...rows.map(r => r.value ?? 0)));
   const band = (W - L - R) / rows.length, bw = Math.min(24, band * 0.6);
   const y = (v) => T + (H - T - B) * (1 - (v ?? 0) / max);
@@ -556,19 +584,19 @@ function columnChart(rows, { unit = '', fixedMax = null, labelEvery = null } = {
 }
 
 // 선 2개(여/남). rows: [{label, a, b}]
-function lineChart(rows, names = ['여', '남']) {
+function lineChart(rows, names = ['여', '남'], width = 600) {
   if (!rows?.length) return '<p class="muted">데이터 없음</p>';
-  const W = 600, H = 190, L = 34, R = 10, T = 14, B = 26;
+  const W = Math.max(280, width), H = 190, L = 34, R = 10, T = 14, B = 26;
   const max = niceMax(Math.max(1, ...rows.flatMap(r => [r.a, r.b])));
   const step = (W - L - R) / Math.max(1, rows.length - 1);
   const x = (i) => L + step * i, y = (v) => T + (H - T - B) * (1 - v / max);
   const path = (k) => rows.map((r, i) => `${i ? 'L' : 'M'}${x(i)},${y(r[k])}`).join(' ');
-  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" data-w="${W}" data-l="${L}" data-r="${R}">`;
   for (const t of (Number.isInteger(max / 2) ? [0, max / 2, max] : [0, max])) {
     svg += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--grid)" stroke-width="1"/>` +
       `<text x="${L - 6}" y="${y(t) + 4}" font-size="11" text-anchor="end" fill="var(--ink-2)">${t}</text>`;
   }
-  const every = Math.ceil(rows.length / 6);
+  const every = Math.max(1, Math.ceil(rows.length / Math.max(4, Math.floor((W - L - R) / 52))));
   rows.forEach((r, i) => { if (i % every === 0 || i === rows.length - 1)
     svg += `<text x="${x(i)}" y="${H - 8}" font-size="11" text-anchor="middle" fill="var(--ink-2)">${escapeHtml(r.label)}</text>`; });
   svg += `<path d="${path('a')}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
@@ -595,10 +623,11 @@ function wireLine(el, rows, fmt) {
   const svg = el.querySelector('svg'), area = el.querySelector('.hitArea'), cross = el.querySelector('.cross');
   if (!svg || !area) return;
   area.onmousemove = (e) => {
-    const box = svg.getBoundingClientRect(), vx = (e.clientX - box.left) * 600 / box.width;
-    const step = (600 - 34 - 10) / Math.max(1, rows.length - 1);
-    const i = Math.max(0, Math.min(rows.length - 1, Math.round((vx - 34) / step)));
-    const cx = 34 + step * i;
+    const W = +svg.dataset.w || 600, L = +svg.dataset.l || 34, R = +svg.dataset.r || 10;
+    const box = svg.getBoundingClientRect(), vx = (e.clientX - box.left) * W / box.width;
+    const step = (W - L - R) / Math.max(1, rows.length - 1);
+    const i = Math.max(0, Math.min(rows.length - 1, Math.round((vx - L) / step)));
+    const cx = L + step * i;
     cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('visibility', 'visible');
     showTip(e, fmt(rows[i]));
   };
@@ -607,14 +636,19 @@ function wireLine(el, rows, fmt) {
 
 async function loadStats() {
   const box = $('stats');
+  // 카드를 그리기 전에 잰다. 폰에서 viewBox 600 을 줄이면 축 글자가 안 읽힌다.
+  const chartW = Math.max(280, Math.min(640, (box.clientWidth || 360) - 36));
   box.innerHTML = '<div class="card muted">불러오는 중…</div>';
   const { data: s, error } = await sb.rpc('admin_stats');
   if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
 
-  const table = (rows, cols) => !rows?.length ? '<p class="muted">데이터 없음</p>' :
-    `<table><tr>${cols.map(c => `<th class="${c[2] ? 'num' : ''}">${c[1]}</th>`).join('')}</tr>` +
-    rows.map(r => `<tr>${cols.map(c =>
-      `<td class="${c[2] ? 'num' : ''}">${r[c[0]] ?? '-'}</td>`).join('')}</tr>`).join('') + '</table>';
+  const table = (rows, cols) => {
+    if (!rows?.length) return '<p class="muted">데이터 없음</p>';
+    const html = `<table><tr>${cols.map(c => `<th class="${c[2] ? 'num' : ''}">${c[1]}</th>`).join('')}</tr>` +
+      rows.map(r => `<tr>${cols.map(c =>
+        `<td class="${c[2] ? 'num' : ''}">${r[c[0]] ?? '-'}</td>`).join('')}</tr>`).join('') + '</table>';
+    return cols.length >= 4 ? `<div class="wideWrap">${html}</div>` : html;
+  };
 
   const m = s.meetings ?? {}, a = s.activation ?? {}, p = s.photo ?? {};
   // 대기 시간 — "웬만하면 하루 안에 방을 연다" (2026-10-01). 실패해도 나머지 통계는 그린다.
@@ -650,7 +684,7 @@ async function loadStats() {
       </table>
       <div class="viz" id="vizWait" style="margin-top:12px">
         <p class="muted" style="margin:0 0 4px">대기 시간 분포 (명, 최근 30일) — 오른쪽 두 칸(24시간+)이 비어야 한다</p>
-        ${columnChart(histRows, { unit: '명' })}
+        ${columnChart(histRows, { unit: '명', width: chartW })}
         ${tableView(histRows, [['label', '대기'], ['value', '명', 1]])}
       </div>
     </div>
@@ -659,7 +693,7 @@ async function loadStats() {
       <h2 style="margin-top:0">일별 가입 (최근 30일)</h2>
       <p class="muted">광고를 켠 뒤 유입과 성비가 어떻게 움직이는가. 한쪽 선만 오르면 그쪽 광고를 멈춘다(OPENING §5). 테스트 지역 제외.</p>
       <div class="viz" id="vizSignup">
-        ${lineChart(signRows)}
+        ${lineChart(signRows, ['여', '남'], chartW)}
         ${tableView(signRows, [['day', '날짜'], ['a', '여', 1], ['b', '남', 1]])}
       </div>
     </div>
@@ -680,7 +714,7 @@ async function loadStats() {
       <p class="muted">방 ${outTotal}개. 판정까지 = 6일 · 미팅 뒤 상호 선택 판정까지 감(북극성의 "완주" 보다 한 단계 뒤) · 미팅 무산 = 올 사람이 1명 이하였고 다시 모이지 못함 ·
          해산 = 한 명만 남음. 무산·해산이 늘면 [방] 탭에서 어디서 끊겼는지 본다. 테스트 지역 제외.</p>
       <div class="viz" id="vizOutcome">
-        ${columnChart(outRows, { unit: '개' })}
+        ${columnChart(outRows, { unit: '개', width: chartW })}
         ${tableView(outRows, [['label', '결과'], ['value', '방', 1], ['pct', '%', 1]])}
       </div>
     </div>
@@ -688,7 +722,7 @@ async function loadStats() {
     <div class="card">
       <h2 style="margin-top:0">북극성 · 주차별 완주율</h2>
       <p class="muted">개설 후 완주할 시간이 부족한 방은 분모에서 뺀다. 막대 = 주차별 완주율(%).</p>
-      <div class="viz" id="vizCohort">${columnChart(cohortRows, { unit: '%', fixedMax: 100 })}</div>
+      <div class="viz" id="vizCohort">${columnChart(cohortRows, { unit: '%', fixedMax: 100, width: chartW })}</div>
       ${table(s.cohorts, [['cohort_week', '주차'], ['rooms_opened', '개설', 1],
         ['rooms_mature', '판정가능', 1], ['rooms_completed', '완주', 1], ['completion_rate_pct', '완주율%', 1]])}
     </div>
@@ -706,7 +740,7 @@ async function loadStats() {
     <div class="card">
       <h2 style="margin-top:0">일차별 완료율 · 어디서 죽는가</h2>
       <p class="muted">막대가 꺾이는 일차가 손볼 곳이다(%).</p>
-      <div class="viz" id="vizDays">${columnChart(dayRows, { unit: '%', fixedMax: 100 })}</div>
+      <div class="viz" id="vizDays">${columnChart(dayRows, { unit: '%', fixedMax: 100, width: chartW })}</div>
       <details style="margin-top:6px;font-size:13px"><summary class="muted" style="cursor:pointer">표로 보기</summary>
       ${table(s.day_completion, [['day_no', '일차'], ['rooms_reached', '도달', 1],
         ['rooms_completed', '완료', 1], ['completion_rate_pct', '완료율%', 1]])}
