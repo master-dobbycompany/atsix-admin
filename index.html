@@ -149,6 +149,14 @@ const ACTIONS = [
   ['removed_from_room', '방에서 제외', ''],
   ['suspended', '이용 정지', 'warn'],
 ];
+const ACTION_LABEL = Object.fromEntries(ACTIONS.map(([a, label]) => [a, label]));
+// 경고는 기록만 남긴다. 상대에게 알림을 보내지 않는다.
+const ACT_CONFIRM = {
+  reviewed_no_action: '문제 없음으로 기록하고 이 신고를 닫을까요? 상대에게는 알리지 않아요.',
+  warned: '경고로 기록만 남길까요? 상대에게는 알리지 않아요.',
+  removed_from_room: '이 방에서 내보내고 기록할까요?',
+  suspended: '들어 있는 방에서 내보내고, 재매칭을 30일 막을까요?',
+};
 const ROOM_STATUS = { active: '대화 중', meeting_unlocked: '미팅 중', closed: '종료' };
 const MEET_STATUS = {
   scheduling: '시간 정하는 중', confirmed: '시간 확정', done: '판정 완료', cancelled: '무산',
@@ -227,23 +235,55 @@ function render(d) {
 async function loadReports() {
   const box = $('reports');
   box.innerHTML = '<div class="card muted">불러오는 중…</div>';
-  const { data, error } = await sb.rpc('admin_open_reports');
+  const [{ data, error }, handled] = await Promise.all([
+    sb.rpc('admin_open_reports'),
+    sb.rpc('admin_handled_reports', { p_limit: 20 }),
+  ]);
   if (error) { box.innerHTML = `<div class="card">오류: ${error.message}</div>`; return; }
-  if (!data.length) {
-    box.innerHTML = '<div class="card">미처리 신고가 없어요. 👍</div>';
-    return;
-  }
   box.innerHTML = '';
-  for (const r of data) box.appendChild(card(r));
+  if (!data?.length) {
+    const empty = document.createElement('div');
+    empty.className = 'card';
+    empty.textContent = '미처리 신고가 없어요.';
+    box.appendChild(empty);
+  } else {
+    for (const r of data) box.appendChild(card(r));
+  }
+  box.appendChild(handledCard(handled));
+}
+
+function handledCard(res) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const rows = res.error ? null : (res.data ?? []);
+  const body = rows?.map(h => `<div class="line">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <b>${escapeHtml(ACTION_LABEL[h.action] ?? h.action)}</b>
+        <span class="muted">${when(h.acted_at)}</span>
+      </div>
+      <p style="margin:4px 0"><b>${escapeHtml(h.reported ?? '(탈퇴)')}</b>
+         · ${escapeHtml(REASONS[h.reason_code] ?? h.reason_code)}
+         <span class="muted">· ${h.hours_to_action == null ? '' : Math.round(Number(h.hours_to_action)) + '시간 만'}</span></p>
+      <p>${escapeHtml(h.note || '(근거 없음)')}</p>
+      <p class="muted">${escapeHtml(h.acted_by ?? '')}</p>
+    </div>`).join('');
+  el.innerHTML = `<h2 style="margin-top:0">처리한 신고</h2>
+    <p class="muted">최근 처리 최대 20건. 판단 근거가 여기 남아요.</p>
+    ${res.error ? '<p class="muted">기록을 불러오지 못했어요</p>' : (body || '<p class="muted">아직 없어요</p>')}`;
+  return el;
 }
 
 function card(r) {
   const el = document.createElement('div');
   el.className = 'card';
   const hot = r.hours_open >= 24;
+  const safety = r.reason_code === 'minor_safety';
   el.innerHTML = `
     <div class="row" style="justify-content:space-between; align-items:center">
-      <span class="pill ${hot ? 'hot' : ''}">${Math.round(r.hours_open)}시간 경과</span>
+      <span>
+        ${safety ? '<span class="pill hot">아동 안전</span> ' : ''}
+        <span class="pill ${hot ? 'hot' : ''}">${Math.round(r.hours_open)}시간 경과</span>
+      </span>
       <span class="muted">${when(r.created_at)}</span>
     </div>
     <p style="margin-top:8px"><b>${escapeHtml(r.reported ?? '(탈퇴)')}</b> 님을
@@ -256,6 +296,7 @@ function card(r) {
       <button class="ghost histBtn" style="flex:1">이 사람 이력</button>
     </div>
     <div class="ctx hidden"></div>
+    <div class="hist hidden"></div>
     <div style="height:10px"></div>
     <textarea placeholder="판단 근거 (분쟁 시 이게 핵심이에요)"></textarea>
     <div style="height:8px"></div>
@@ -273,26 +314,42 @@ function card(r) {
     renderContext(ctx, data ?? [], r);
     ctx.dataset.loaded = '1';
   };
+  const hist = el.querySelector('.hist');
   el.querySelector('.histBtn').onclick = async () => {
-    const { data } = await sb.rpc('admin_user_history', { p_user: r.reported_id });
-    toast(!data?.length ? '이전 신고 없음'
-      : `이전 신고 ${data.length}건 · 최근: ${REASONS[data[0].reason_code] ?? ''} (${data[0].action ?? '미처리'})`);
+    hist.classList.toggle('hidden');
+    if (hist.dataset.loaded) return;
+    if (!r.reported_id) {
+      hist.innerHTML = '<p class="muted">탈퇴한 계정이라 이 사람 명의 과거 신고는 모을 수 없어요. 처리 기록은 아래 「처리한 신고」에 남아요.</p>';
+      hist.dataset.loaded = '1';
+      return;
+    }
+    hist.innerHTML = '<p class="muted">불러오는 중…</p>';
+    const { data, error } = await sb.rpc('admin_user_history', { p_user: r.reported_id });
+    if (error) { hist.innerHTML = '<p class="muted">이력을 불러오지 못했어요</p>'; return; }
+    const past = (data ?? []).filter(h => h.action);
+    hist.innerHTML = past.length ? past.map(h => `<div class="line">
+        <p><b>${escapeHtml(ACTION_LABEL[h.action] ?? h.action)}</b>
+           · ${escapeHtml(REASONS[h.reason_code] ?? h.reason_code)}
+           <span class="muted">${when(h.created_at)}</span></p>
+        <p>${escapeHtml(h.note || '(근거 없음)')}</p>
+      </div>`).join('') : '<p class="muted">이전 처리 없음</p>';
+    hist.dataset.loaded = '1';
   };
 
   el.querySelectorAll('.act').forEach(btn => {
     btn.onclick = async () => {
       const note = el.querySelector('textarea').value.trim();
       if (!note) return toast('판단 근거를 적어주세요');
-      if (!confirm(`"${btn.textContent}" 처리할까요?`)) return;
+      if (!confirm(ACT_CONFIRM[btn.dataset.a] ?? `"${btn.textContent}" 처리할까요?`)) return;
       el.querySelectorAll('button').forEach(b => b.disabled = true);
       const { data, error } = await sb.rpc('admin_act', {
         p_report: r.id, p_action: btn.dataset.a, p_note: note, p_block_days: 30,
       });
       if (error) { toast('실패: ' + error.message); el.querySelectorAll('button').forEach(b => b.disabled = false); return; }
       toast(data ?? '처리 완료');
-      el.remove();
       const { data: d } = await sb.rpc('admin_dashboard');
       if (d) render(d);
+      await loadReports();
     };
   });
   return el;
