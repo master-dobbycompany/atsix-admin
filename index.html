@@ -436,7 +436,15 @@ async function loadReview() {
           <button class="ghost reviewOpen" data-room="${r.room_id}" style="padding:8px 14px">대화 보기</button>
           <div class="reviewBox" id="rv-${r.room_id}"></div>
         </div>`).join('');
-  box.innerHTML = head + body;
+  // 열람 기록 — 누가 어느 방을 언제 열었는지(1년 보관, 2026-10-18). 처리방침이 기록을 남긴다고 약속했다.
+  const { data: log, error: logErr } = await sb.rpc('admin_chat_review_log', { p_limit: 50 });
+  const logCard = `<div class="card">
+      <b>열람 기록</b> <span class="muted">최근 50건</span>
+      ${logErr ? `<p class="muted">${escapeHtml(logErr.message)}</p>`
+        : !log?.length ? '<p class="muted">아직 연 방이 없어요.</p>'
+        : log.map(l => `<p><span class="muted">${when(l.viewed_at)}</span> ${escapeHtml(l.admin_nickname)} → ${escapeHtml(l.room_name)}${l.room_region ? ` <span class="muted">(${escapeHtml(l.room_region)})</span>` : ''}</p>`).join('')}
+    </div>`;
+  box.innerHTML = head + body + logCard;
 
   $('reviewUntilSave').onclick = async () => {
     const v = $('reviewUntil').value;
