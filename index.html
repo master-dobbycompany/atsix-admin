@@ -293,6 +293,7 @@ function card(r) {
     <p style="margin-top:8px"><b>${escapeHtml(r.reported ?? '(탈퇴)')}</b> 님을
        <b>${escapeHtml(REASONS[r.reason_code] ?? r.reason_code)}</b> 로 신고
        <span class="muted">(신고자 ${escapeHtml(r.reporter ?? '(탈퇴)')})</span></p>
+    ${r.message_image ? chatPhotoTag(r.message_image) : ''}
     ${r.message_body ? `<div class="msg">${escapeHtml(r.message_body)}</div>` : ''}
     ${r.reason ? `<p class="muted">사유 상세: ${escapeHtml(r.reason)}</p>` : ''}
     <div class="row" style="margin-top:8px">
@@ -309,6 +310,7 @@ function card(r) {
         `<button class="${cls} act" data-a="${a}" style="flex:1 1 46%">${label}</button>`).join('')}
     </div>`;
 
+  hydrateChatPhotos(el); // 신고된 사진(있으면)
   const ctx = el.querySelector('.ctx');
   el.querySelector('.ctxBtn').onclick = async () => {
     if (!r.room_id) return toast('방 정보가 없는 신고예요');
@@ -457,8 +459,10 @@ async function loadReview() {
       if (error) { out.innerHTML = `<p>오류: ${escapeHtml(error.message)}</p>`; return; }
       out.innerHTML = (msgs ?? []).slice().reverse().map(m => m.hidden
         ? `<p class="muted">${when(m.created_at)} · (동의 안 함 — 가려짐)</p>`
-        : `<p><span class="muted">${when(m.created_at)}</span> <b>${escapeHtml(m.nickname)}</b> ${escapeHtml(m.body ?? '')}</p>`
+        : `<p><span class="muted">${when(m.created_at)}</span> <b>${escapeHtml(m.nickname)}</b> ${escapeHtml(m.body ?? '')}</p>
+           ${chatPhotoTag(m.image_path)}`
       ).join('') || '<p class="muted">말이 없어요</p>';
+      hydrateChatPhotos(out);
     };
   }
 }
@@ -922,6 +926,26 @@ async function loadStats() {
   wireColumn($('vizDays'), dayRows, r => `${r.label}차<br>완료 <b>${r.value}%</b> (${r.raw.rooms_completed}/${r.raw.rooms_reached})`);
 }
 
+// 채팅 사진(2026-10-17). <img data-chat-photo="경로"> 를 그려 두고 서명 URL 로 채운다.
+// 운영자가 열 수 있는 사진은 서버가 정한다 — 신고된 사진, 열람 기간 안의 동의한 사람 사진. 나머지는 「볼 수 없음」.
+function chatPhotoTag(path) {
+  return path ? `<div><img data-chat-photo="${escapeHtml(path)}" alt="채팅 사진"
+      style="max-width:220px; max-height:260px; border-radius:10px; background:#eee; display:block; margin:4px 0"></div>` : '';
+}
+async function hydrateChatPhotos(root) {
+  for (const im of root.querySelectorAll('img[data-chat-photo]')) {
+    if (im.dataset.done) continue;
+    im.dataset.done = '1';
+    const { data, error } = await sb.storage.from('chat-photos').createSignedUrl(im.dataset.chatPhoto, 600);
+    if (error || !data?.signedUrl) {
+      im.replaceWith(Object.assign(document.createElement('p'),
+        { className: 'muted', textContent: '(사진 — 볼 수 없어요: 신고되지 않았거나 지운 사진)' }));
+    } else {
+      im.src = data.signedUrl;
+    }
+  }
+}
+
 function renderContext(ctx, roomRows, r) {
   const reported = r.reported ?? '';
   const focusBody = r.message_body ?? '';
@@ -943,11 +967,13 @@ function renderContext(ctx, roomRows, r) {
       const nick = m.nickname ?? '';
       const body = m.body ?? '';
       if (q && !`${nick} ${body}`.toLowerCase().includes(q)) return '';
-      const hit = focusBody && body === focusBody;
+      const hit = (r.message_id && m.message_id === r.message_id) || (focusBody && body === focusBody);
       const from = nick === reported;
-      return `<p class="${hit ? 'hit' : ''} ${from ? 'fromTarget' : ''}"><b>${escapeHtml(nick)}</b>${escapeHtml(body)}</p>`;
+      return `<p class="${hit ? 'hit' : ''} ${from ? 'fromTarget' : ''}"><b>${escapeHtml(nick)}</b>${escapeHtml(body)}</p>
+        ${chatPhotoTag(m.image_path)}`;
     }).join('');
     list.innerHTML = html || '<p class="muted">해당하는 말이 없어요</p>';
+    hydrateChatPhotos(list);
     const jump = list.querySelector('.hit') || list.querySelector('.fromTarget');
     jump?.scrollIntoView({ block: 'center' });
   }
