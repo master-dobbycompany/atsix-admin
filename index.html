@@ -520,10 +520,12 @@ async function loadRegions() {
 
   const need = (data ?? [])[0]?.open_min_per_gender ?? 30;
   const rows = (data ?? []).map(r => {
-    // 자동으로 열리는 조건: 여·남 각 need 명 이상 + 만나는 지점 2곳(각 근처 카페 2 · 식당 2) (auto_open_regions, 10분마다)
+    // 자동으로 열리는 조건: 여·남 각 need 명 이상 + 켜진 만나는 지점 2곳 (2026-10-24, 카페·식당은 안 봄)
     const why = r.active ? ''
-      : (r.female < need || r.male < need) ? `여 ${Math.max(0, need - r.female)} · 남 ${Math.max(0, need - r.male)} 더`
-      : !r.places_ready ? '<b>장소 부족</b>(만나는 지점 2곳 · 각 근처 카페 2 · 식당 2)'
+      // 세는 사람은 최근 14일 안에 앱을 열고 푸시 토큰이 죽지 않은 사람이다(2026-11-01, female_ready·male_ready).
+      : ((r.female_ready ?? r.female) < need || (r.male_ready ?? r.male) < need)
+        ? `여 ${Math.max(0, need - (r.female_ready ?? r.female))} · 남 ${Math.max(0, need - (r.male_ready ?? r.male))} 더`
+      : !r.places_ready ? '<b>장소 부족</b>(만나는 지점 2곳)'
       : '다음 배치에 열림';
     return `<div class="line">
       <div class="row" style="justify-content:space-between; align-items:center">
@@ -531,6 +533,7 @@ async function loadRegions() {
         <span>${r.active ? '<b>열림</b>' : '<span class="muted">준비 중</span>'}</span>
       </div>
       <p class="muted" style="margin:4px 0">대기 <b>${r.waiting}</b> · 여 ${r.female} · 남 ${r.male}
+         · 센 사람 여 ${r.female_ready ?? '-'} · 남 ${r.male_ready ?? '-'}
          · ${r.places_ready ? '지점 2곳 준비' : '장소 부족'}</p>
       <div class="row" style="justify-content:space-between; align-items:center">
         <span class="muted">${why}</span>
@@ -542,8 +545,9 @@ async function loadRegions() {
 
   box.innerHTML = `<div class="card">
     <h2 style="margin-top:0">지역별 대기 인원</h2>
-    <p class="muted">준비 중인 지역은 <b>여 ${need} · 남 ${need} 명 이상</b>이 모이고 장소가
-       <b>카페 2 · 식당 2</b> 이상이면 10분 안에 <b>자동으로 열린다</b>(어느 지역이든).
+    <p class="muted">준비 중인 지역은 <b>여 ${need} · 남 ${need} 명 이상</b>이 모이고
+       <b>만나는 지점 2곳</b>이 켜져 있으면 10분 안에 <b>자동으로 열린다</b>(어느 지역이든).
+       근처 카페·식당은 열림 조건이 아니다(2026-10-24).
        재회가 영구 금지라 첫 방이 깨져도 새 조합을 짤 풀이 있어야 한다(2026-10-01).
        열리는 순간 그 지역 사람들이 줄을 서고 "지역이 열렸어요" 알림이 간다.</p>
     ${rows || '<p class="muted">아직 없어요</p>'}
@@ -553,6 +557,7 @@ async function loadRegions() {
       기준 바꾸기: [설정] 탭.
     </p>
   </div>`;
+  box.insertAdjacentHTML('beforeend', await meetingPointOverlapCard());
   for (const b of box.querySelectorAll('.regionToggle')) {
     b.onclick = async () => {
       const on = b.dataset.on === '1', region = b.dataset.region;
@@ -569,7 +574,37 @@ async function loadRegions() {
   }
 }
 
-// ---- 장소: 지역별 풀. 방마다 카페 2 · 식당 2 를 보여 주므로 지역이 열리려면 2·2 이상 ----
+// ---- 만나는 지점 겹침: 같은 시각 방이 지점 수보다 많으면 두 무리가 같은 출구에 모인다 (2026-11-19) ----
+async function meetingPointOverlapCard() {
+  const { data, error } = await sb.rpc('admin_meeting_point_overlap');
+  if (error) return `<div class="card">지점 겹침 오류: ${escapeHtml(error.message)}</div>`;
+  const fmt = (iso) => iso ? new Date(iso).toLocaleString('ko-KR',
+    { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '-';
+  const rows = (data ?? []).map(r => {
+    // 지점을 더 받아야 하는 신호: 이미 겹쳤거나(지금·지난 30일) 한 시각에 몰린 방이 지점 수보다 많다.
+    const need = r.overlap_upcoming > 0 || r.overlap_30d > 0 || r.peak > r.points;
+    const flag = r.points === 0 ? '<span class="muted">지점 없음</span>'
+      : need ? '<b>지점 더 필요</b>' : '<span class="muted">괜찮음</span>';
+    return `<div class="line">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <b>${escapeHtml(r.region)}</b><span>${flag}</span>
+      </div>
+      <p class="muted" style="margin:4px 0">켜진 지점 <b>${r.points}</b> · 앞으로 미팅 ${r.upcoming}
+         · 한 시각 최대 <b>${r.peak}</b>${r.peak ? ` (${fmt(r.peak_at)})` : ''}
+         · 겹침 지금 <b>${r.overlap_upcoming}</b> · 지난 30일 ${r.overlap_30d}
+         ${r.unassigned ? ` · <b>지점 없이 확정 ${r.unassigned}</b>` : ''}</p>
+    </div>`;
+  }).join('');
+  return `<div class="card">
+    <h2 style="margin-top:0">만나는 지점 겹침</h2>
+    <p class="muted">같은 시각에 확정된 방에는 덜 쓰인 지점부터 준다. 지점이 2곳이면 같은 시각 세 번째 방부터
+       같은 출구에 두 무리가 모인다. <b>한 시각 최대</b>가 켜진 지점 수를 넘거나 <b>겹침</b>이 0보다 크면
+       그 지역에 지점을 더 받는다(다른 권역으로). 테스트 지역은 뺐다.</p>
+    ${rows || '<p class="muted">지점이나 확정된 미팅이 있는 지역이 아직 없어요</p>'}
+  </div>`;
+}
+
+// ---- 장소 표는 남아 있다. 앱은 근처 가게를 보여 주지 않고, 지역 열림도 이 수를 보지 않는다 (2026-10-24). ----
 let placesRegion = '강남·서초';
 async function loadPlaces() {
   const box = $('places');
@@ -602,7 +637,7 @@ async function loadPlaces() {
     <div class="card">
       <div class="row"><select id="placesRegion" style="flex:1;padding:10px;border-radius:12px">${options}</select></div>
       <p>쓰는 장소 <b>카페 ${cafes} · 식당 ${meals}</b>
-         ${cafes >= 2 && meals >= 2 ? '— 지역을 열 수 있어요' : '— <b>2·2 가 안 되면 사람이 모여도 지역이 안 열려요</b>'}</p>
+         — 앱은 이 목록을 보여 주지 않아요. 지역은 만나는 지점 2곳으로 열려요.</p>
       ${list || '<p class="muted">아직 없어요</p>'}
     </div>
     <div class="card">
