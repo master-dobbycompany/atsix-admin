@@ -110,6 +110,7 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
       <button id="tabConfig">설정</button>
       <button id="tabReview">대화</button>
       <button id="tabFeedback">알림·오류</button>
+      <button id="tabNews">소식</button>
     </div>
 
     <div id="reports"></div>
@@ -120,6 +121,7 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
     <div id="config" class="hidden"></div>
     <div id="review" class="hidden"></div>
     <div id="feedback" class="hidden"></div>
+    <div id="news" class="hidden"></div>
   </div>
 </div>
 
@@ -507,6 +509,73 @@ async function loadFeedback() {
         { p_id: Number(b.dataset.id), p_resolved: b.dataset.done !== 'true' });
       if (error) { toast(`오류: ${escapeHtml(error.message)}`); return; }
       await loadFeedback();
+    };
+  }
+}
+
+// ---- 소식: 채팅방봇이 아침에 올릴 링크를 고른다 (2026-11-25) ----
+// 승인한 것만 방에 올라간다(계열마다 하루 하나, 8시~21시). 올라간 뒤에는 바꿀 수 없다.
+const NEWS_TOPICS = [['문화', '문화'], ['먹고마시기', '먹고마시기'], ['운동', '운동'], ['취미', '취미'], ['', '일상(관심사 없이 연 방)']];
+const NEWS_STATUS = { pending: '승인 전', approved: '승인', rejected: '거절' };
+async function loadNews() {
+  const box = $('news');
+  box.innerHTML = '<div class="card muted">불러오는 중…</div>';
+  const { data, error } = await sb.rpc('admin_news_list', {});
+  if (error) { box.innerHTML = `<div class="card">오류: ${escapeHtml(error.message)}</div>`; return; }
+  const rows = data ?? [];
+  const head = `<div class="card"><b>채팅방봇 · 오늘의 소식</b>
+      <p class="muted">승인한 링크만 방에 올라가요. 계열마다 하루 하나, 오전 8시~오후 9시(늦게 승인하면 그때).
+        올라간 뒤에는 바꿀 수 없어요. 후보는 매일 새벽 5시 30분에 모여요.</p>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" id="newsFetch" style="flex:1">후보 다시 모으기</button>
+      </div>
+      <div class="line">
+        <p><b>직접 넣기</b></p>
+        <select id="newsTopic">${NEWS_TOPICS.map(([k, l]) => `<option value="${escapeHtml(k)}">${escapeHtml(l)}</option>`).join('')}</select>
+        <input id="newsTitle" placeholder="제목" maxlength="200" style="width:100%; margin-top:6px">
+        <input id="newsUrl" placeholder="https://..." style="width:100%; margin-top:6px">
+        <input id="newsSource" placeholder="출처(선택)" maxlength="60" style="width:100%; margin-top:6px">
+        <button id="newsAdd" style="margin-top:6px">후보에 넣기</button>
+      </div></div>`;
+  const groups = NEWS_TOPICS.map(([k, label]) => {
+    const list = rows.filter(r => r.topic === k);
+    const open = list[0]?.open_rooms ?? 0;
+    const posted = list.reduce((s, r) => s + (r.posted_rooms ?? 0), 0);
+    return `<div class="card"><b>${escapeHtml(label)}</b>
+      <span class="muted">열린 방 ${open}${posted ? ` · 올라간 방 ${posted}` : ''}</span>
+      ${list.map(r => `<div class="line" style="${r.status === 'rejected' ? 'opacity:.5' : ''}">
+          <p>${r.status === 'approved' ? '✅ ' : ''}<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.title)}</a></p>
+          <p class="muted">${escapeHtml(r.source ?? '')} · ${r.origin === 'manual' ? '직접 넣음' : '자동'} · ${koStatus(NEWS_STATUS, r.status)}
+            ${r.posted_rooms ? ` · ${r.posted_rooms}개 방에 올라감` : ''}</p>
+          ${r.posted_rooms ? '' : `<div class="row">
+            ${r.status !== 'approved' ? `<button class="newsAct" data-id="${r.id}" data-s="approved" style="padding:6px 12px">승인</button>` : ''}
+            ${r.status !== 'rejected' ? `<button class="ghost newsAct" data-id="${r.id}" data-s="rejected" style="padding:6px 12px">거절</button>` : ''}
+            ${r.status !== 'pending' ? `<button class="ghost newsAct" data-id="${r.id}" data-s="pending" style="padding:6px 12px">되돌리기</button>` : ''}
+          </div>`}
+        </div>`).join('') || '<p class="muted">오늘 후보가 없어요</p>'}</div>`;
+  }).join('');
+  box.innerHTML = head + groups;
+  $('newsFetch').onclick = async () => {
+    const { error } = await sb.rpc('admin_news_fetch');
+    if (error) { toast(`오류: ${error.message}`); return; }
+    toast('모으는 중이에요. 10초쯤 뒤 새로고침해 주세요');
+  };
+  $('newsAdd').onclick = async () => {
+    const { error } = await sb.rpc('admin_news_add', {
+      p_topic: $('newsTopic').value, p_title: $('newsTitle').value,
+      p_url: $('newsUrl').value.trim(), p_source: $('newsSource').value,
+    });
+    if (error) { toast(`오류: ${error.message}`); return; }
+    await loadNews();
+  };
+  for (const b of box.querySelectorAll('.newsAct')) {
+    b.onclick = async () => {
+      if (b.dataset.s === 'approved' &&
+          !confirm('이 링크를 승인할까요? 게시 시간이면 이 계열의 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.')) return;
+      const { data: n, error } = await sb.rpc('admin_news_decide', { p_id: Number(b.dataset.id), p_status: b.dataset.s });
+      if (error) { toast(`오류: ${error.message}`); return; }
+      if (b.dataset.s === 'approved') toast(n ? `${n}개 방에 올렸어요` : '승인했어요. 게시 시간이 되면 올라가요');
+      await loadNews();
     };
   }
 }
@@ -1068,7 +1137,8 @@ function escapeHtml(s) {
 
 // 탭. 들어갈 때만 불러온다 — 신고 처리하러 열었는데 통계 쿼리까지 도는 건 낭비다.
 const TABS = { reports: loadReports, rooms: loadRooms, stats: loadStats, regions: loadRegions,
-               places: loadPlaces, config: loadConfig, review: loadReview, feedback: loadFeedback };
+               places: loadPlaces, config: loadConfig, review: loadReview, feedback: loadFeedback,
+               news: loadNews };
 let tab = 'reports';
 
 async function showTab(name) {
@@ -1087,6 +1157,7 @@ $('tabPlaces').onclick = () => showTab('places');
 $('tabConfig').onclick = () => showTab('config');
 $('tabReview').onclick = () => showTab('review');
 $('tabFeedback').onclick = () => showTab('feedback');
+$('tabNews').onclick = () => showTab('news');
 
 $('loginBtn').onclick = login;
 $('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
