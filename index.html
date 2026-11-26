@@ -523,30 +523,45 @@ async function loadNews() {
   const { data, error } = await sb.rpc('admin_news_list', {});
   if (error) { box.innerHTML = `<div class="card">오류: ${escapeHtml(error.message)}</div>`; return; }
   const rows = data ?? [];
+  // 주제 칸: 계열 넷 + 일상 + 같은 관심사로 열린 방의 관심사(2026-11-27). 옛 서버면 계열 다섯만.
+  const tq = await sb.rpc('admin_news_topics', {});
+  const topicInfo = new Map((tq.data ?? []).map(t => [t.topic, t]));
+  const baseKeys = NEWS_TOPICS.map(([k]) => k);
+  const interestTopics = (tq.data ?? []).filter(t => !baseKeys.includes(t.topic))
+    .sort((a, b) => (a.parent ?? '').localeCompare(b.parent ?? '') || a.topic.localeCompare(b.topic));
+  const allTopics = [...NEWS_TOPICS, ...interestTopics.map(t => [t.topic, `${t.topic} (${t.parent ?? '관심사'})`])];
   const head = `<div class="card"><b>채팅방봇 · 오늘의 소식</b>
-      <p class="muted">승인한 링크만 방에 올라가요. 방마다 하루 한 번이라 <b>계열마다 승인은 하나</b>예요 —
-        같은 계열에서 다른 걸 승인하면 앞의 승인은 「승인 전」 으로 돌아가요. 오전 8시~오후 9시(늦게 승인하면 그때).
+      <p class="muted">승인한 링크만 방에 올라가요. 방마다 하루 한 번이라 <b>칸마다 승인은 하나</b>예요 —
+        같은 칸에서 다른 걸 승인하면 앞의 승인은 「승인 전」 으로 돌아가요. 오전 8시~오후 9시(늦게 승인하면 그때).
         올라간 뒤에는 바꿀 수 없어요. 후보는 매일 새벽 5시 30분에 모여요.</p>
-      <p class="muted">한꺼번에 하려면 계열마다 왼쪽 동그라미로 하나씩 고른 뒤 「고른 것 한꺼번에 승인」.</p>
+      <p class="muted"><b>같은 관심사로 묶인 방</b>(예: 여섯 명 모두 「영화」)은 그 관심사 칸이 따로 생겨요 — 그 방에는 관심사 소식이 먼저,
+        승인하지 않으면 그 계열 소식이 대신 올라가요. 관심사 칸은 그런 방이 열려 있을 때만 보여요.</p>
+      <p class="muted">한꺼번에 하려면 칸마다 왼쪽 동그라미로 하나씩 고른 뒤 「고른 것 한꺼번에 승인」.</p>
       <div class="row" style="margin-top:8px">
         <button id="newsBulk" style="flex:1" disabled>고른 것 한꺼번에 승인</button>
         <button class="ghost" id="newsFetch" style="flex:1">후보 다시 모으기</button>
       </div>
       <div class="line">
         <p><b>직접 넣기</b></p>
-        <select id="newsTopic">${NEWS_TOPICS.map(([k, l]) => `<option value="${escapeHtml(k)}">${escapeHtml(l)}</option>`).join('')}</select>
+        <select id="newsTopic">${allTopics.map(([k, l]) => `<option value="${escapeHtml(k)}">${escapeHtml(l)}</option>`).join('')}</select>
         <input id="newsTitle" placeholder="제목" maxlength="200" style="width:100%; margin-top:6px">
         <input id="newsUrl" placeholder="https://..." style="width:100%; margin-top:6px">
         <input id="newsSource" placeholder="출처(선택)" maxlength="60" style="width:100%; margin-top:6px">
         <button id="newsAdd" style="margin-top:6px">후보에 넣기</button>
       </div></div>`;
-  const groups = NEWS_TOPICS.map(([k, label]) => {
+  const groups = allTopics.map(([k, label]) => {
     const list = rows.filter(r => r.topic === k);
-    const open = list[0]?.open_rooms ?? 0;
+    const info = topicInfo.get(k);
+    const open = info?.open_rooms ?? list[0]?.open_rooms ?? 0;
+    const fallback = info?.fallback_rooms ?? 0;
+    const isInterest = !baseKeys.includes(k);
     const posted = list.reduce((s, r) => s + (r.posted_rooms ?? 0), 0);
     const hasApproved = list.some(r => r.status === 'approved');
+    const note = isInterest
+      ? `같은 관심사 방 ${open} · 승인하지 않으면 「${escapeHtml(info?.parent ?? '계열')}」 소식이 대신 올라가요`
+      : `열린 방 ${open}${fallback ? ` · 관심사 소식이 없는 관심사 방 ${fallback}개도 이걸 받아요` : ''}`;
     return `<div class="card"><b>${escapeHtml(label)}</b>
-      <span class="muted">열린 방 ${open}${posted ? ` · 올라간 방 ${posted}` : ''}</span>
+      <span class="muted">${note}${posted ? ` · 올라간 방 ${posted}` : ''}</span>
       ${list.map(r => `<div class="line" style="${r.status === 'rejected' ? 'opacity:.5' : ''}">
           <p>${posted || r.status === 'approved' ? '' : `<input type="radio" class="newsPick" name="pick-${escapeHtml(k || 'daily')}" value="${r.id}" data-topic="${escapeHtml(label)}" style="margin-right:6px">`}${r.status === 'approved' ? '✅ ' : ''}<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.title)}</a></p>
           <p class="muted">${escapeHtml(r.source ?? '')} · ${r.origin === 'manual' ? '직접 넣음' : '자동'} · ${koStatus(NEWS_STATUS, r.status)}
@@ -584,7 +599,7 @@ async function loadNews() {
     const chosen = picks();
     if (!chosen.length) return;
     const names = chosen.map(p => p.dataset.topic).join(', ');
-    if (!confirm(`${names} — ${chosen.length}개 계열을 승인할까요? 이미 승인한 계열은 고른 것으로 바뀌어요. ` +
+    if (!confirm(`${names} — ${chosen.length}개 칸을 승인할까요? 이미 승인한 칸은 고른 것으로 바뀌어요. ` +
                  '게시 시간이면 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.')) return;
     $('newsBulk').disabled = true;
     let rooms = 0, failed = [];
@@ -593,13 +608,13 @@ async function loadNews() {
       if (error) failed.push(`${p.dataset.topic}: ${error.message}`); else rooms += n ?? 0;
     }
     if (failed.length) toast(`일부 실패 — ${failed.join(' / ')}`);
-    else toast(rooms ? `${chosen.length}개 계열 승인 · ${rooms}개 방에 올렸어요` : `${chosen.length}개 계열 승인했어요. 게시 시간이 되면 올라가요`);
+    else toast(rooms ? `${chosen.length}개 칸 승인 · ${rooms}개 방에 올렸어요` : `${chosen.length}개 칸 승인했어요. 게시 시간이 되면 올라가요`);
     await loadNews();
   };
   for (const b of box.querySelectorAll('.newsAct')) {
     b.onclick = async () => {
       if (b.dataset.s === 'approved' &&
-          !confirm((b.dataset.swap ? '이 계열에 이미 승인한 링크가 있어요. 이걸로 바꿀까요? 앞의 것은 「승인 전」 으로 돌아가요.\n\n' : '') +
+          !confirm((b.dataset.swap ? '이 칸에 이미 승인한 링크가 있어요. 이걸로 바꿀까요? 앞의 것은 「승인 전」 으로 돌아가요.\n\n' : '') +
                    '게시 시간이면 이 계열의 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.')) return;
       const { data: n, error } = await sb.rpc('admin_news_decide', { p_id: Number(b.dataset.id), p_status: b.dataset.s });
       if (error) { toast(`오류: ${error.message}`); return; }
