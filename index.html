@@ -524,9 +524,12 @@ async function loadNews() {
   if (error) { box.innerHTML = `<div class="card">오류: ${escapeHtml(error.message)}</div>`; return; }
   const rows = data ?? [];
   const head = `<div class="card"><b>채팅방봇 · 오늘의 소식</b>
-      <p class="muted">승인한 링크만 방에 올라가요. 계열마다 하루 하나, 오전 8시~오후 9시(늦게 승인하면 그때).
+      <p class="muted">승인한 링크만 방에 올라가요. 방마다 하루 한 번이라 <b>계열마다 승인은 하나</b>예요 —
+        같은 계열에서 다른 걸 승인하면 앞의 승인은 「승인 전」 으로 돌아가요. 오전 8시~오후 9시(늦게 승인하면 그때).
         올라간 뒤에는 바꿀 수 없어요. 후보는 매일 새벽 5시 30분에 모여요.</p>
+      <p class="muted">한꺼번에 하려면 계열마다 왼쪽 동그라미로 하나씩 고른 뒤 「고른 것 한꺼번에 승인」.</p>
       <div class="row" style="margin-top:8px">
+        <button id="newsBulk" style="flex:1" disabled>고른 것 한꺼번에 승인</button>
         <button class="ghost" id="newsFetch" style="flex:1">후보 다시 모으기</button>
       </div>
       <div class="line">
@@ -541,14 +544,15 @@ async function loadNews() {
     const list = rows.filter(r => r.topic === k);
     const open = list[0]?.open_rooms ?? 0;
     const posted = list.reduce((s, r) => s + (r.posted_rooms ?? 0), 0);
+    const hasApproved = list.some(r => r.status === 'approved');
     return `<div class="card"><b>${escapeHtml(label)}</b>
       <span class="muted">열린 방 ${open}${posted ? ` · 올라간 방 ${posted}` : ''}</span>
       ${list.map(r => `<div class="line" style="${r.status === 'rejected' ? 'opacity:.5' : ''}">
-          <p>${r.status === 'approved' ? '✅ ' : ''}<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.title)}</a></p>
+          <p>${posted || r.status === 'approved' ? '' : `<input type="radio" class="newsPick" name="pick-${escapeHtml(k || 'daily')}" value="${r.id}" data-topic="${escapeHtml(label)}" style="margin-right:6px">`}${r.status === 'approved' ? '✅ ' : ''}<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.title)}</a></p>
           <p class="muted">${escapeHtml(r.source ?? '')} · ${r.origin === 'manual' ? '직접 넣음' : '자동'} · ${koStatus(NEWS_STATUS, r.status)}
             ${r.posted_rooms ? ` · ${r.posted_rooms}개 방에 올라감` : ''}</p>
           ${r.posted_rooms ? '' : `<div class="row">
-            ${r.status !== 'approved' ? `<button class="newsAct" data-id="${r.id}" data-s="approved" style="padding:6px 12px">승인</button>` : ''}
+            ${r.status !== 'approved' ? `<button class="newsAct" data-id="${r.id}" data-s="approved" data-swap="${hasApproved && !posted ? '1' : ''}" style="padding:6px 12px">${hasApproved ? '이걸로 바꾸기' : '승인'}</button>` : ''}
             ${r.status !== 'rejected' ? `<button class="ghost newsAct" data-id="${r.id}" data-s="rejected" style="padding:6px 12px">거절</button>` : ''}
             ${r.status !== 'pending' ? `<button class="ghost newsAct" data-id="${r.id}" data-s="pending" style="padding:6px 12px">되돌리기</button>` : ''}
           </div>`}
@@ -568,10 +572,35 @@ async function loadNews() {
     if (error) { toast(`오류: ${error.message}`); return; }
     await loadNews();
   };
+  const picks = () => [...box.querySelectorAll('.newsPick:checked')];
+  for (const p of box.querySelectorAll('.newsPick')) {
+    p.onchange = () => {
+      const n = picks().length;
+      $('newsBulk').disabled = n === 0;
+      $('newsBulk').textContent = n ? `고른 것 한꺼번에 승인 (${n})` : '고른 것 한꺼번에 승인';
+    };
+  }
+  $('newsBulk').onclick = async () => {
+    const chosen = picks();
+    if (!chosen.length) return;
+    const names = chosen.map(p => p.dataset.topic).join(', ');
+    if (!confirm(`${names} — ${chosen.length}개 계열을 승인할까요? 이미 승인한 계열은 고른 것으로 바뀌어요. ` +
+                 '게시 시간이면 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.')) return;
+    $('newsBulk').disabled = true;
+    let rooms = 0, failed = [];
+    for (const p of chosen) {
+      const { data: n, error } = await sb.rpc('admin_news_decide', { p_id: Number(p.value), p_status: 'approved' });
+      if (error) failed.push(`${p.dataset.topic}: ${error.message}`); else rooms += n ?? 0;
+    }
+    if (failed.length) toast(`일부 실패 — ${failed.join(' / ')}`);
+    else toast(rooms ? `${chosen.length}개 계열 승인 · ${rooms}개 방에 올렸어요` : `${chosen.length}개 계열 승인했어요. 게시 시간이 되면 올라가요`);
+    await loadNews();
+  };
   for (const b of box.querySelectorAll('.newsAct')) {
     b.onclick = async () => {
       if (b.dataset.s === 'approved' &&
-          !confirm('이 링크를 승인할까요? 게시 시간이면 이 계열의 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.')) return;
+          !confirm((b.dataset.swap ? '이 계열에 이미 승인한 링크가 있어요. 이걸로 바꿀까요? 앞의 것은 「승인 전」 으로 돌아가요.\n\n' : '') +
+                   '게시 시간이면 이 계열의 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.')) return;
       const { data: n, error } = await sb.rpc('admin_news_decide', { p_id: Number(b.dataset.id), p_status: b.dataset.s });
       if (error) { toast(`오류: ${error.message}`); return; }
       if (b.dataset.s === 'approved') toast(n ? `${n}개 방에 올렸어요` : '승인했어요. 게시 시간이 되면 올라가요');
@@ -929,6 +958,9 @@ async function loadStats() {
     sb.rpc('admin_wait_stats'), sb.rpc('admin_wait_histogram'), sb.rpc('admin_signup_trend', { p_days: 30 }),
   ]);
   const { data: outcomes } = await sb.rpc('admin_room_outcomes', { p_days: 90 });
+  // 친구 추천 (2026-11-26). 함수가 아직 없으면(적용 전) 카드에 안내만.
+  const { data: rf } = await sb.rpc('admin_referral_stats');
+  const pct = v => v == null ? '-' : `${v}%`;
   const outTotal = (outcomes ?? []).reduce((n, o) => n + o.rooms, 0);
   // 북극성의 "완주"(6일 채움)와 헷갈리지 않게, 여기 완주는 "판정까지"(미팅 뒤 상호 선택까지 감)로 적는다.
   const outRows = (outcomes ?? []).map(o => ({ label: o.outcome === '완주' ? '판정까지' : o.outcome, value: o.rooms,
@@ -970,6 +1002,25 @@ async function loadStats() {
         ${tableView(signRows, [['day', '날짜'], ['a', '여', 1], ['b', '남', 1]])}
       </div>
     </div>
+    <div class="card">
+      <h2 style="margin-top:0">친구 추천</h2>
+      <p class="muted">추천 코드가 사람을 데려오는가, 그 사람들이 남는가. 2026-11-26 부터 이성끼리만 혜택(자리 2 · 30일)이라
+         「같은 성별」 은 그 전에 들어온 것뿐이다. 받은 사람 성별이 한쪽으로 쏠리면 그 성별 대기만 길어진다.
+         누가 누구를 추천했는지는 싣지 않는다. 테스트 지역 제외.</p>
+      ${rf ? `<table>
+        <tr><td>추천 (전체 / 최근 30일)</td><td class="num"><b>${rf.total}</b> / ${rf.last_30d}</td></tr>
+        <tr><td>추천한 사람 · 한 사람이 가장 많이 데려온 수</td><td class="num">${rf.referrers} · ${rf.max_by_one}</td></tr>
+        <tr><td>이성 / 같은 성별</td><td class="num">${rf.opposite} / ${rf.same}</td></tr>
+        <tr><td>추천받은 사람 여 / 남</td><td class="num">${rf.referee_female} / ${rf.referee_male}</td></tr>
+        <tr><td colspan="2" class="muted" style="padding-top:10px">최근 90일 가입자 — 추천받음 vs 아님</td></tr>
+        <tr><td>가입</td><td class="num">${rf.signup_referred} vs ${rf.signup_other}</td></tr>
+        <tr><td>방에 들어간 비율</td><td class="num"><b>${pct(rf.joined_referred_pct)}</b> vs ${pct(rf.joined_other_pct)}</td></tr>
+        <tr><td>방에 들어간 사람 중 판정까지 간 비율</td><td class="num"><b>${pct(rf.completed_referred_pct)}</b> vs ${pct(rf.completed_other_pct)}</td></tr>
+        <tr><td colspan="2" class="muted" style="padding-top:10px">지금 추천 자리(2)가 있는 사람</td></tr>
+        <tr><td>자리 2 · 방 두 개에 있음 · 두 번째 방 찾는 중</td><td class="num"><b>${rf.slot_holders}</b> · ${rf.slot_two_rooms} · ${rf.slot_searching}</td></tr>
+      </table>` : '<p class="muted">불러오지 못했다 (admin_referral_stats)</p>'}
+    </div>
+
     <div class="card">
       <h2 style="margin-top:0">미팅 결과</h2>
       <table>
