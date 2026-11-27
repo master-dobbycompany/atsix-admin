@@ -108,7 +108,6 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
       <button id="tabRegions">지역</button>
       <button id="tabPlaces">장소</button>
       <button id="tabConfig">설정</button>
-      <button id="tabReview">대화</button>
       <button id="tabFeedback">알림·오류</button>
       <button id="tabNews">소식</button>
     </div>
@@ -119,7 +118,6 @@ h2 { font-size:15px; font-weight:800; margin:14px 0 6px; }
     <div id="regions" class="hidden"></div>
     <div id="places" class="hidden"></div>
     <div id="config" class="hidden"></div>
-    <div id="review" class="hidden"></div>
     <div id="feedback" class="hidden"></div>
     <div id="news" class="hidden"></div>
   </div>
@@ -405,76 +403,6 @@ async function loadRooms() {
       ${meeting}
     </div>`;
   }).join('');
-}
-
-// ---- 대화 열람 (2026-10-17) ----
-// 선택 동의한 사람이 동의한 뒤 단체방에 쓴 말만 보인다. 동의 안 한 사람의 말은 서버가 가린다.
-// 1:1 은 어떤 경우에도 열지 않는다(서버 함수에 그 표가 없다). 기간(아래 날짜)이 지나면 서버가 거부한다.
-// 방을 열 때마다 서버가 열람 기록을 남긴다.
-async function loadReview() {
-  const box = $('review');
-  box.innerHTML = '<div class="card muted">불러오는 중…</div>';
-  const { data: until } = await sb.rpc('admin_chat_review_until');
-  const head = `<div class="card">
-      <b>대화 열람 기간</b>
-      <p class="muted">이 날짜(포함)까지만 열람할 수 있어요. 비우면 바로 닫혀요. 처리방침에 적은 기간과 같아야 해요.</p>
-      <div class="row" style="align-items:center; gap:8px">
-        <input id="reviewUntil" type="date" value="${until ?? ''}" style="padding:8px">
-        <button class="ghost" id="reviewUntilSave" style="padding:8px 14px">저장</button>
-        <button class="ghost" id="reviewUntilClear" style="padding:8px 14px">끄기</button>
-      </div>
-    </div>`;
-  const { data, error } = await sb.rpc('admin_review_rooms');
-  const body = error
-    ? `<div class="card muted">${escapeHtml(error.message)}</div>`
-    : !data?.length
-      ? '<div class="card muted">동의한 멤버가 있는 방이 없어요.</div>'
-      : data.map(r => `<div class="card">
-          <div class="row" style="justify-content:space-between">
-            <b>${escapeHtml(r.name)}</b>
-            <span class="muted">${escapeHtml(r.region)} · ${escapeHtml(koStatus(ROOM_STATUS, r.status))}</span>
-          </div>
-          <p class="muted">동의 ${r.consented}/${r.members}명 · 마지막 말 ${r.last_at ? when(r.last_at) : '-'}</p>
-          <button class="ghost reviewOpen" data-room="${r.room_id}" style="padding:8px 14px">대화 보기</button>
-          <div class="reviewBox" id="rv-${r.room_id}"></div>
-        </div>`).join('');
-  // 열람 기록 — 누가 어느 방을 언제 열었는지(1년 보관, 2026-10-18). 처리방침이 기록을 남긴다고 약속했다.
-  const { data: log, error: logErr } = await sb.rpc('admin_chat_review_log', { p_limit: 50 });
-  const logCard = `<div class="card">
-      <b>열람 기록</b> <span class="muted">최근 50건</span>
-      ${logErr ? `<p class="muted">${escapeHtml(logErr.message)}</p>`
-        : !log?.length ? '<p class="muted">아직 연 방이 없어요.</p>'
-        : log.map(l => `<p><span class="muted">${when(l.viewed_at)}</span> ${escapeHtml(l.admin_nickname)} → ${escapeHtml(l.room_name)}${l.room_region ? ` <span class="muted">(${escapeHtml(l.room_region)})</span>` : ''}</p>`).join('')}
-    </div>`;
-  box.innerHTML = head + body + logCard;
-
-  $('reviewUntilSave').onclick = async () => {
-    const v = $('reviewUntil').value;
-    if (!v) { toast('날짜를 고르세요'); return; }
-    const { error } = await sb.rpc('admin_set_chat_review_until', { p_date: v });
-    toast(error ? `오류: ${escapeHtml(error.message)}` : '저장했어요');
-    await loadReview();
-  };
-  $('reviewUntilClear').onclick = async () => {
-    const { error } = await sb.rpc('admin_set_chat_review_until', { p_date: null });
-    toast(error ? `오류: ${escapeHtml(error.message)}` : '열람을 껐어요');
-    await loadReview();
-  };
-  for (const b of box.querySelectorAll('.reviewOpen')) {
-    b.onclick = async () => {
-      const room = b.dataset.room;
-      const out = $('rv-' + room);
-      out.innerHTML = '<p class="muted">불러오는 중…</p>';
-      const { data: msgs, error } = await sb.rpc('admin_review_room_messages', { p_room: room, p_limit: 300 });
-      if (error) { out.innerHTML = `<p>오류: ${escapeHtml(error.message)}</p>`; return; }
-      out.innerHTML = (msgs ?? []).slice().reverse().map(m => m.hidden
-        ? `<p class="muted">${when(m.created_at)} · (동의 안 함 — 가려짐)</p>`
-        : `<p><span class="muted">${when(m.created_at)}</span> <b>${escapeHtml(m.nickname)}</b> ${escapeHtml(m.body ?? '')}</p>
-           ${chatPhotoTag(m.image_path)}`
-      ).join('') || '<p class="muted">말이 없어요</p>';
-      hydrateChatPhotos(out);
-    };
-  }
 }
 
 // ---- 문제 알리기 · 앱 오류 (2026-10-17) ----
@@ -1203,7 +1131,7 @@ function escapeHtml(s) {
 
 // 탭. 들어갈 때만 불러온다 — 신고 처리하러 열었는데 통계 쿼리까지 도는 건 낭비다.
 const TABS = { reports: loadReports, rooms: loadRooms, stats: loadStats, regions: loadRegions,
-               places: loadPlaces, config: loadConfig, review: loadReview, feedback: loadFeedback,
+               places: loadPlaces, config: loadConfig, feedback: loadFeedback,
                news: loadNews };
 let tab = 'reports';
 
@@ -1221,7 +1149,6 @@ $('tabStats').onclick = () => showTab('stats');
 $('tabRegions').onclick = () => showTab('regions');
 $('tabPlaces').onclick = () => showTab('places');
 $('tabConfig').onclick = () => showTab('config');
-$('tabReview').onclick = () => showTab('review');
 $('tabFeedback').onclick = () => showTab('feedback');
 $('tabNews').onclick = () => showTab('news');
 
