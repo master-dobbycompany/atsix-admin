@@ -445,23 +445,37 @@ async function loadFeedback() {
 // 승인한 것만 방에 올라간다(계열마다 하루 하나, 8시~21시). 올라간 뒤에는 바꿀 수 없다.
 const NEWS_TOPICS = [['문화', '문화'], ['먹고마시기', '먹고마시기'], ['운동', '운동'], ['취미', '취미'], ['', '일상(관심사 없이 연 방)']];
 const NEWS_STATUS = { pending: '승인 전', approved: '승인', rejected: '거절' };
+// 하루 전에 승인한다(2026-11-27): 17시에 내일 후보가 모인다. 17시 이후에 열면 「내일」 탭부터.
+function kstDate(addDays = 0) {
+  return new Date(Date.now() + 9 * 3600e3 + addDays * 86400e3).toISOString().slice(0, 10);
+}
+let newsDay = null;   // 'today' | 'tomorrow'
 async function loadNews() {
   const box = $('news');
   box.innerHTML = '<div class="card muted">불러오는 중…</div>';
-  const { data, error } = await sb.rpc('admin_news_list', {});
+  if (!newsDay) newsDay = new Date(Date.now() + 9 * 3600e3).getUTCHours() >= 17 ? 'tomorrow' : 'today';
+  const day = newsDay === 'tomorrow' ? kstDate(1) : kstDate(0);
+  const dayLabel = `${newsDay === 'tomorrow' ? '내일' : '오늘'} ${Number(day.slice(5, 7))}월 ${Number(day.slice(8))}일`;
+  const { data, error } = await sb.rpc('admin_news_list', { p_date: day });
   if (error) { box.innerHTML = `<div class="card">오류: ${escapeHtml(error.message)}</div>`; return; }
   const rows = data ?? [];
   // 주제 칸: 계열 넷 + 일상 + 같은 관심사로 열린 방의 관심사(2026-11-27). 옛 서버면 계열 다섯만.
-  const tq = await sb.rpc('admin_news_topics', {});
+  const tq = await sb.rpc('admin_news_topics', { p_date: day });
   const topicInfo = new Map((tq.data ?? []).map(t => [t.topic, t]));
   const baseKeys = NEWS_TOPICS.map(([k]) => k);
   const interestTopics = (tq.data ?? []).filter(t => !baseKeys.includes(t.topic))
     .sort((a, b) => (a.parent ?? '').localeCompare(b.parent ?? '') || a.topic.localeCompare(b.topic));
   const allTopics = [...NEWS_TOPICS, ...interestTopics.map(t => [t.topic, `${t.topic} (${t.parent ?? '관심사'})`])];
   const head = `<div class="card"><b>채팅방봇 · 오늘의 소식</b>
+      <div class="row" style="margin:8px 0">
+        <button class="${newsDay === 'today' ? '' : 'ghost'}" id="newsToday" style="flex:1">오늘 ${Number(kstDate(0).slice(5, 7))}/${Number(kstDate(0).slice(8))}</button>
+        <button class="${newsDay === 'tomorrow' ? '' : 'ghost'}" id="newsTomorrow" style="flex:1">내일 ${Number(kstDate(1).slice(5, 7))}/${Number(kstDate(1).slice(8))}</button>
+      </div>
+      <p class="muted"><b>하루 전에 승인해 두세요.</b> 매일 오후 5시에 내일 후보가 모여요 — 저녁에 「내일」 에서 승인하면 다음 날 오전 8시에 올라가요.
+        못 했으면 그날 아침 「오늘」 에서 승인해도 돼요(바로 올라가요).</p>
       <p class="muted">승인한 링크만 방에 올라가요. 방마다 하루 한 번이라 <b>칸마다 승인은 하나</b>예요 —
         같은 칸에서 다른 걸 승인하면 앞의 승인은 「승인 전」 으로 돌아가요. 오전 8시~오후 9시(늦게 승인하면 그때).
-        올라간 뒤에는 바꿀 수 없어요. 후보는 매일 새벽 5시 30분에 모여요.</p>
+        올라간 뒤에는 바꿀 수 없어요.</p>
       <p class="muted"><b>같은 관심사로 묶인 방</b>(예: 여섯 명 모두 「영화」)은 그 관심사 칸이 따로 생겨요 — 그 방에는 관심사 소식이 먼저,
         승인하지 않으면 그 계열 소식이 대신 올라가요. 관심사 칸은 그런 방이 열려 있을 때만 보여요.</p>
       <p class="muted">한꺼번에 하려면 칸마다 왼쪽 동그라미로 하나씩 고른 뒤 「고른 것 한꺼번에 승인」.</p>
@@ -499,18 +513,20 @@ async function loadNews() {
             ${r.status !== 'rejected' ? `<button class="ghost newsAct" data-id="${r.id}" data-s="rejected" style="padding:6px 12px">거절</button>` : ''}
             ${r.status !== 'pending' ? `<button class="ghost newsAct" data-id="${r.id}" data-s="pending" style="padding:6px 12px">되돌리기</button>` : ''}
           </div>`}
-        </div>`).join('') || '<p class="muted">오늘 후보가 없어요</p>'}</div>`;
+        </div>`).join('') || `<p class="muted">${escapeHtml(dayLabel)} 후보가 없어요</p>`}</div>`;
   }).join('');
   box.innerHTML = head + groups;
+  $('newsToday').onclick = () => { newsDay = 'today'; loadNews(); };
+  $('newsTomorrow').onclick = () => { newsDay = 'tomorrow'; loadNews(); };
   $('newsFetch').onclick = async () => {
-    const { error } = await sb.rpc('admin_news_fetch');
+    const { error } = await sb.rpc('admin_news_fetch', { p_date: day });
     if (error) { toast(`오류: ${error.message}`); return; }
     toast('모으는 중이에요. 10초쯤 뒤 새로고침해 주세요');
   };
   $('newsAdd').onclick = async () => {
     const { error } = await sb.rpc('admin_news_add', {
       p_topic: $('newsTopic').value, p_title: $('newsTitle').value,
-      p_url: $('newsUrl').value.trim(), p_source: $('newsSource').value,
+      p_url: $('newsUrl').value.trim(), p_source: $('newsSource').value, p_date: day,
     });
     if (error) { toast(`오류: ${error.message}`); return; }
     await loadNews();
@@ -527,8 +543,9 @@ async function loadNews() {
     const chosen = picks();
     if (!chosen.length) return;
     const names = chosen.map(p => p.dataset.topic).join(', ');
-    if (!confirm(`${names} — ${chosen.length}개 칸을 승인할까요? 이미 승인한 칸은 고른 것으로 바뀌어요. ` +
-                 '게시 시간이면 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.')) return;
+    if (!confirm(`${dayLabel} · ${names} — ${chosen.length}개 칸을 승인할까요? 이미 승인한 칸은 고른 것으로 바뀌어요. ` +
+                 (newsDay === 'tomorrow' ? '내일 오전 8시에 올라가요(그 전까지는 바꿀 수 있어요).'
+                   : '게시 시간이면 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.'))) return;
     $('newsBulk').disabled = true;
     let rooms = 0, failed = [];
     for (const p of chosen) {
@@ -536,17 +553,21 @@ async function loadNews() {
       if (error) failed.push(`${p.dataset.topic}: ${error.message}`); else rooms += n ?? 0;
     }
     if (failed.length) toast(`일부 실패 — ${failed.join(' / ')}`);
-    else toast(rooms ? `${chosen.length}개 칸 승인 · ${rooms}개 방에 올렸어요` : `${chosen.length}개 칸 승인했어요. 게시 시간이 되면 올라가요`);
+    else toast(rooms ? `${chosen.length}개 칸 승인 · ${rooms}개 방에 올렸어요`
+      : newsDay === 'tomorrow' ? `${chosen.length}개 칸 승인했어요. 내일 오전 8시에 올라가요`
+      : `${chosen.length}개 칸 승인했어요. 게시 시간이 되면 올라가요`);
     await loadNews();
   };
   for (const b of box.querySelectorAll('.newsAct')) {
     b.onclick = async () => {
       if (b.dataset.s === 'approved' &&
           !confirm((b.dataset.swap ? '이 칸에 이미 승인한 링크가 있어요. 이걸로 바꿀까요? 앞의 것은 「승인 전」 으로 돌아가요.\n\n' : '') +
-                   '게시 시간이면 이 계열의 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.')) return;
+                   (newsDay === 'tomorrow' ? '내일 오전 8시에 올라가요(그 전까지는 바꿀 수 있어요).'
+                     : '게시 시간이면 이 칸의 열린 방에 바로 올라가고, 올라간 뒤에는 되돌릴 수 없어요.'))) return;
       const { data: n, error } = await sb.rpc('admin_news_decide', { p_id: Number(b.dataset.id), p_status: b.dataset.s });
       if (error) { toast(`오류: ${error.message}`); return; }
-      if (b.dataset.s === 'approved') toast(n ? `${n}개 방에 올렸어요` : '승인했어요. 게시 시간이 되면 올라가요');
+      if (b.dataset.s === 'approved') toast(n ? `${n}개 방에 올렸어요`
+        : newsDay === 'tomorrow' ? '승인했어요. 내일 오전 8시에 올라가요' : '승인했어요. 게시 시간이 되면 올라가요');
       await loadNews();
     };
   }
